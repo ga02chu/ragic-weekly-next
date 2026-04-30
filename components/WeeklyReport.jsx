@@ -4,7 +4,7 @@ import {
   parsePay, parseAtt, parseLoc, parseAdj,
   calcResults, adjDeltaForMonth,
   fT, fN, fH
-} from './hrCalc';
+} from '../lib/hrCalc';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const readWorkbook = (file) => new Promise((resolve, reject) => {
