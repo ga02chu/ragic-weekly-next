@@ -1,10 +1,16 @@
 'use client'
+import { useEffect, useState } from 'react'
 import AppLayout from '@/components/AppLayout'
-import dynamic from 'next/dynamic'
-
-const WeeklyReport = dynamic(() => import('@/components/WeeklyReport'), { ssr: false })
 
 export default function HRPage() {
+  const [Component, setComponent] = useState(null)
+
+  useEffect(() => {
+    import('@/components/WeeklyReport').then(mod => {
+      setComponent(() => mod.default)
+    })
+  }, [])
+
   return (
     <AppLayout>
       <header className="topbar">
@@ -13,7 +19,7 @@ export default function HRPage() {
         </div>
       </header>
       <div className="content-area">
-        <WeeklyReport />
+        {Component ? <Component /> : <div className="empty-state"><p className="empty-title">載入中...</p></div>}
       </div>
     </AppLayout>
   )
