@@ -101,7 +101,7 @@ export default function YoyPage() {
   const months = Array.from({ length: 12 }, (_, i) => i + 1)
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200 }}>
+    <div style={{ padding: 24, maxWidth: 1600 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, color: '#1a2f4e', marginBottom: 12 }}>年度比較</h1>
 
       {/* 控制列 */}
@@ -157,53 +157,54 @@ export default function YoyPage() {
             ))}
           </div>
 
-          {/* 橫向長條圖比較 */}
-          <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '16px 20px', marginBottom: 16 }}>
-            <div style={{ fontWeight: 600, color: '#1a2f4e', fontSize: 14, marginBottom: 4 }}>各分店營業額對比</div>
-            <div style={{ display: 'flex', gap: 16, fontSize: 11, color: '#6b7280', marginBottom: 12 }}>
-              <span><span style={{ display: 'inline-block', width: 12, height: 8, background: BRAND, borderRadius: 2, marginRight: 4 }} />{displayYear}年</span>
-              <span><span style={{ display: 'inline-block', width: 12, height: 8, background: '#d4b8b8', borderRadius: 2, marginRight: 4 }} />{displayYear - 1}年</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {allStores.map(s => {
-                const c = curr[s], p = prev[s]
-                const dn = c?.displayName || p?.displayName || s
-                const cR = c?.rev || 0, pR = p?.rev || 0
-                return (
-                  <div key={s}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                      <span style={{ fontWeight: 600 }}>{dn}</span>
-                      <span>${fmt(cR)} {diffBadge(cR, pR)}</span>
+          {/* 橫向長條圖比較 — 並排 */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, marginBottom: 16 }}>
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '16px 20px' }}>
+              <div style={{ fontWeight: 600, color: '#1a2f4e', fontSize: 14, marginBottom: 4 }}>各分店營業額對比</div>
+              <div style={{ display: 'flex', gap: 16, fontSize: 11, color: '#6b7280', marginBottom: 12 }}>
+                <span><span style={{ display: 'inline-block', width: 12, height: 8, background: BRAND, borderRadius: 2, marginRight: 4 }} />{displayYear}年</span>
+                <span><span style={{ display: 'inline-block', width: 12, height: 8, background: '#d4b8b8', borderRadius: 2, marginRight: 4 }} />{displayYear - 1}年</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {allStores.map(s => {
+                  const c = curr[s], p = prev[s]
+                  const dn = c?.displayName || p?.displayName || s
+                  const cR = c?.rev || 0, pR = p?.rev || 0
+                  return (
+                    <div key={s}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                        <span style={{ fontWeight: 600 }}>{dn}</span>
+                        <span>${fmt(cR)} {diffBadge(cR, pR)}</span>
+                      </div>
+                      <HBar curr={cR} prev={pR} maxVal={maxRev} colorCurr={BRAND} colorPrev='#d4b8b8' />
                     </div>
-                    <HBar curr={cR} prev={pR} maxVal={maxRev} colorCurr={BRAND} colorPrev='#d4b8b8' />
-                  </div>
-                )
-              })}
+                  )
+                })}
+              </div>
             </div>
-          </div>
 
-          {/* 客單價對比 */}
-          <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '16px 20px', marginBottom: 16 }}>
-            <div style={{ fontWeight: 600, color: '#1a2f4e', fontSize: 14, marginBottom: 4 }}>各分店客單價對比</div>
-            <div style={{ display: 'flex', gap: 16, fontSize: 11, color: '#6b7280', marginBottom: 12 }}>
-              <span><span style={{ display: 'inline-block', width: 12, height: 8, background: BRAND, borderRadius: 2, marginRight: 4 }} />{displayYear}年</span>
-              <span><span style={{ display: 'inline-block', width: 12, height: 8, background: '#d4b8b8', borderRadius: 2, marginRight: 4 }} />{displayYear - 1}年</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {allStores.map(s => {
-                const c = curr[s], p = prev[s]
-                const dn = c?.displayName || p?.displayName || s
-                const cAv = getAvg(c?.avgPays || []), pAv = getAvg(p?.avgPays || [])
-                return (
-                  <div key={s}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                      <span style={{ fontWeight: 600 }}>{dn}</span>
-                      <span>${fmt(cAv)} {diffBadge(cAv, pAv)}</span>
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '16px 20px' }}>
+              <div style={{ fontWeight: 600, color: '#1a2f4e', fontSize: 14, marginBottom: 4 }}>各分店客單價對比</div>
+              <div style={{ display: 'flex', gap: 16, fontSize: 11, color: '#6b7280', marginBottom: 12 }}>
+                <span><span style={{ display: 'inline-block', width: 12, height: 8, background: BRAND, borderRadius: 2, marginRight: 4 }} />{displayYear}年</span>
+                <span><span style={{ display: 'inline-block', width: 12, height: 8, background: '#d4b8b8', borderRadius: 2, marginRight: 4 }} />{displayYear - 1}年</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {allStores.map(s => {
+                  const c = curr[s], p = prev[s]
+                  const dn = c?.displayName || p?.displayName || s
+                  const cAv = getAvg(c?.avgPays || []), pAv = getAvg(p?.avgPays || [])
+                  return (
+                    <div key={s}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                        <span style={{ fontWeight: 600 }}>{dn}</span>
+                        <span>${fmt(cAv)} {diffBadge(cAv, pAv)}</span>
+                      </div>
+                      <HBar curr={cAv} prev={pAv} maxVal={maxAvg} colorCurr={BRAND} colorPrev='#d4b8b8' />
                     </div>
-                    <HBar curr={cAv} prev={pAv} maxVal={maxAvg} colorCurr={BRAND} colorPrev='#d4b8b8' />
-                  </div>
-                )
-              })}
+                  )
+                })}
+              </div>
             </div>
           </div>
 

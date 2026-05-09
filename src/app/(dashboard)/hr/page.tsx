@@ -7,7 +7,7 @@ import { processRecords } from '@/lib/ragic/processRecords'
 import { fmt } from '@/lib/ragic/utils'
 import {
   parsePay, parseAtt, parseLoc, parseAdj, parseBreak, buildBreakMap,
-  adjDeltaForMonth, calcResults, computeStoreDist, STORE_CATS,
+  adjDeltaForMonth, adjExtrasForMonth, empPfForMonth, calcResults, computeStoreDist,
   fT, fH,
   type HREmployee, type AttResult, type LocRecord, type AdjRecord, type BreakRecord, type CalcResult,
 } from '@/lib/hr/calc'
@@ -139,7 +139,26 @@ export default function HRPage() {
       }
 
       const adjMap = adjDeltaForMonth(year, month, adj, pay)
-      const result = calcResults(sDate, eDate, storeFilter, stdH, pf, adjMap, excludeMgmt, locFilter, pay, att, loc, {}, buildBreakMap(brk))
+
+      // 把調整表的「其他加扣項目」併入 att 的 extras / extrasDetail
+      const adjEx = adjExtrasForMonth(adj, pay)
+      const mergedAtt: AttResult = {
+        ...att,
+        extras: { ...att.extras },
+        extrasDetail: Object.fromEntries(Object.entries(att.extrasDetail).map(([k, v]) => [k, [...v]])),
+      }
+      Object.entries(adjEx.extras).forEach(([id, amt]) => {
+        mergedAtt.extras[id] = (mergedAtt.extras[id] || 0) + amt
+      })
+      Object.entries(adjEx.details).forEach(([id, items]) => {
+        if (!mergedAtt.extrasDetail[id]) mergedAtt.extrasDetail[id] = []
+        mergedAtt.extrasDetail[id].push(...items)
+      })
+
+      // 新進/離職的個別比例
+      const empPfMap = empPfForMonth(year, month, adj, pay)
+
+      const result = calcResults(sDate, eDate, storeFilter, stdH, pf, adjMap, excludeMgmt, locFilter, pay, mergedAtt, loc, {}, buildBreakMap(brk), empPfMap)
       setCalcResult(result)
       const dist = computeStoreDist(result.results, result.locR)
       setStoreDist(dist)
@@ -290,8 +309,13 @@ export default function HRPage() {
           )}
           <div>
             <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>門市篩選</div>
-            <input type="text" value={storeFilter} onChange={e => setStoreFilter(e.target.value)} placeholder="（全部）"
-              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 12, width: 100 }} />
+            <select value={storeFilter} onChange={e => setStoreFilter(e.target.value)}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 12, minWidth: 120 }}>
+              <option value="">（全部）</option>
+              {Array.from(new Set(pay.map(p => p.dept).filter(Boolean))).sort().map(d => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
           </div>
           <div>
             <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>職區</div>
@@ -334,7 +358,7 @@ export default function HRPage() {
       {/* 結果 */}
       {hasResult && (
         <>
-          {/* 人事成本佔比明細 */}
+          {/* 人事成本佔比明細 — 卡片版 */}
           {(() => {
             const salTotal = results.reduce((s, e) => s + (e.propSal || 0), 0)
             const otTotal = results.reduce((s, e) => s + (e.type === '月薪正職' ? (e.weekOtPay || 0) : 0), 0)
@@ -349,51 +373,68 @@ export default function HRPage() {
             }, 0)
             const grandTotal = salTotal + otTotal + insTotal + holi2000 + annual20032
             const totalRev = chartData.reduce((s, d) => s + d.rev, 0)
-            const pct = (v: number, base: number) => base > 0 ? `${(v / base * 100).toFixed(1)}%` : '–'
-            const rows = [
-              { label: '薪資', val: salTotal },
-              { label: '加班費', val: otTotal },
-              { label: '勞健保', val: insTotal },
-              { label: '國定假日加倍', val: holi2000 },
-              { label: '特休轉薪資', val: annual20032 },
+            const pct = (v: number, base: number) => base > 0 ? `${(v / base * 100).toFixed(1)}%` : null
+            const items: { label: string; val: number; icon: string; color: string }[] = [
+              { label: '薪資', val: salTotal, icon: '💼', color: '#3b82f6' },
+              { label: '加班費', val: otTotal, icon: '⏱️', color: '#f59e0b' },
+              { label: '勞健保', val: insTotal, icon: '🏥', color: '#10b981' },
+              { label: '國定假日加倍', val: holi2000, icon: '🎉', color: '#8b5cf6' },
+              { label: '特休轉薪資', val: annual20032, icon: '🏖️', color: '#ec4899' },
             ]
+            const ratio = totalRev > 0 ? grandTotal / totalRev : 0
             return (
-              <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', overflow: 'hidden', marginBottom: 16 }}>
-                <div style={{ padding: '14px 20px', borderBottom: '1px solid #e8e6e1', fontWeight: 600, color: '#1a2f4e', fontSize: 14 }}>人事成本佔比明細</div>
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ background: '#fafaf8' }}>
-                        {['項目', '金額', '佔人事成本', ...(totalRev > 0 ? ['佔月營業額'] : [])].map(h => (
-                          <th key={h} style={{ padding: '10px 16px', textAlign: h === '項目' ? 'left' : 'right', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1' }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map(r => (
-                        <tr key={r.label} style={{ borderBottom: '1px solid #f0eee9' }}>
-                          <td style={{ padding: '10px 16px' }}>{r.label}</td>
-                          <td style={{ padding: '10px 16px', textAlign: 'right' }}>{fT(r.val)}</td>
-                          <td style={{ padding: '10px 16px', textAlign: 'right' }}>{pct(r.val, grandTotal)}</td>
-                          {totalRev > 0 && <td style={{ padding: '10px 16px', textAlign: 'right' }}>{pct(r.val, totalRev)}</td>}
-                        </tr>
-                      ))}
-                      <tr style={{ background: '#fafaf8', fontWeight: 700, borderTop: '2px solid #e8e6e1' }}>
-                        <td style={{ padding: '10px 16px' }}>人事成本合計</td>
-                        <td style={{ padding: '10px 16px', textAlign: 'right' }}>{fT(grandTotal)}</td>
-                        <td style={{ padding: '10px 16px', textAlign: 'right' }}>100%</td>
-                        {totalRev > 0 && <td style={{ padding: '10px 16px', textAlign: 'right', color: grandTotal / totalRev > 0.35 ? '#dc2626' : '#16a34a' }}>{pct(grandTotal, totalRev)}</td>}
-                      </tr>
-                      {totalRev > 0 && (
-                        <tr style={{ background: '#f0fdf4' }}>
-                          <td style={{ padding: '10px 16px', color: '#6b7280' }}>月營業額</td>
-                          <td style={{ padding: '10px 16px', textAlign: 'right', color: '#6b7280' }}>{fT(totalRev)}</td>
-                          <td style={{ padding: '10px 16px', textAlign: 'right', color: '#9ca3af' }}>–</td>
-                          <td style={{ padding: '10px 16px', textAlign: 'right', color: '#9ca3af' }}>100%</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontWeight: 600, color: '#1a2f4e', fontSize: 14, marginBottom: 10 }}>人事成本佔比明細</div>
+
+                {/* 細項卡片 */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 12 }}>
+                  {items.map(it => {
+                    const pCost = grandTotal > 0 ? (it.val / grandTotal * 100) : 0
+                    return (
+                      <div key={it.label} style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '14px 16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                          <div style={{ width: 32, height: 32, borderRadius: 8, background: `${it.color}1a`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>{it.icon}</div>
+                          <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>{it.label}</div>
+                        </div>
+                        <div style={{ fontSize: 20, fontWeight: 700, color: '#1a2f4e', marginBottom: 8 }}>{fT(it.val)}</div>
+                        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>佔人事成本 {pct(it.val, grandTotal) || '–'}</div>
+                        <div style={{ height: 6, background: '#f3f4f6', borderRadius: 3, overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${pCost.toFixed(1)}%`, background: it.color, borderRadius: 3 }} />
+                        </div>
+                        {totalRev > 0 && (
+                          <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 6 }}>佔月營業額 {pct(it.val, totalRev)}</div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* 合計卡片（強調） */}
+                <div style={{
+                  background: `linear-gradient(135deg, ${BRAND} 0%, #5c4040 100%)`,
+                  borderRadius: 12, padding: '20px 24px', color: '#fff',
+                  display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16,
+                }}>
+                  <div>
+                    <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>人事成本合計</div>
+                    <div style={{ fontSize: 28, fontWeight: 700 }}>{fT(grandTotal)}</div>
+                  </div>
+                  {totalRev > 0 && (
+                    <>
+                      <div style={{ width: 1, height: 40, background: 'rgba(255,255,255,0.2)' }} />
+                      <div>
+                        <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>月營業額</div>
+                        <div style={{ fontSize: 22, fontWeight: 700 }}>{fT(totalRev)}</div>
+                      </div>
+                      <div style={{ width: 1, height: 40, background: 'rgba(255,255,255,0.2)' }} />
+                      <div>
+                        <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>佔月營業額</div>
+                        <div style={{ fontSize: 24, fontWeight: 700, color: ratio > 0.35 ? '#fca5a5' : '#86efac' }}>
+                          {(ratio * 100).toFixed(1)}%
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             )

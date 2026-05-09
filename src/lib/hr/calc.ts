@@ -456,6 +456,51 @@ export function buildBreakMap(breaks: BreakRecord[]): Record<string, number> {
   return map
 }
 
+// ── adjExtrasForMonth ───────────────────────────────────────────────────────
+// 把調整表的「其他加扣項目」轉成 {empId: 金額/明細} 以便併入 gross_pay
+export function adjExtrasForMonth(
+  adj: AdjRecord[], pay: HREmployee[]
+): { extras: Record<string, number>; details: Record<string, { code: string; desc: string; amt: number; note: string }[]> } {
+  const nameToId: Record<string, string> = {}
+  pay.forEach(e => { if (e.name) nameToId[e.name.trim()] = e.id })
+  const extras: Record<string, number> = {}
+  const details: Record<string, { code: string; desc: string; amt: number; note: string }[]> = {}
+  adj.forEach(r => {
+    if (r.type !== '加扣項目') return
+    const id = nameToId[r.name]
+    if (!id) return
+    extras[id] = (extras[id] || 0) + r.days  // adj 表 加扣項目 用 days 欄存金額
+    if (!details[id]) details[id] = []
+    details[id].push({ code: 'adj', desc: '調整表加扣項', amt: r.days, note: '' })
+  })
+  return { extras, details }
+}
+
+// ── empPfForMonth ───────────────────────────────────────────────────────────
+// 新進/離職員工的個別比例：在職天數 / 當月總天數
+export function empPfForMonth(
+  year: number, month: number,
+  adj: AdjRecord[], pay: HREmployee[]
+): Record<string, { pf: number; reason: string }> {
+  const nameToId: Record<string, string> = {}
+  pay.forEach(e => { if (e.name) nameToId[e.name.trim()] = e.id })
+  const totalDays = new Date(year, month, 0).getDate()
+  const result: Record<string, { pf: number; reason: string }> = {}
+  adj.forEach(r => {
+    if (!r.startDate) return
+    if (r.startDate.getFullYear() !== year || r.startDate.getMonth() !== month - 1) return
+    const id = nameToId[r.name]
+    if (!id) return
+    if (r.type === '到職') {
+      const daysWorked = totalDays - r.startDate.getDate() + 1
+      result[id] = { pf: daysWorked / totalDays, reason: `新進(${r.startDate.getMonth() + 1}/${r.startDate.getDate()})` }
+    } else if (r.type === '離職') {
+      result[id] = { pf: r.startDate.getDate() / totalDays, reason: `離職(${r.startDate.getMonth() + 1}/${r.startDate.getDate()})` }
+    }
+  })
+  return result
+}
+
 // ── adjDeltaForMonth ────────────────────────────────────────────────────────
 export function adjDeltaForMonth(
   year: number, month: number,
@@ -512,7 +557,8 @@ export function calcResults(
   att: AttResult,
   loc: LocRecord[],
   ovr: Record<string, number> = {},
-  breakMap: Record<string, number> = {}
+  breakMap: Record<string, number> = {},
+  empPfMap: Record<string, { pf: number; reason: string }> = {}
 ): CalcResult {
   const recs = att.records.filter(p => p.date && p.date >= sDate && p.date <= eDate)
   const locR = loc.filter(p => p.date && p.date >= sDate && p.date <= eDate)
@@ -552,25 +598,29 @@ export function calcResults(
     const ins = calcIns(e)
     const eS = effStd(e.id, stdH, adjMap, ovr, pay)
 
+    // 個別員工比例（新進/離職）× 全域 pf（週期模式）
+    const empPf = empPfMap[e.id]?.pf
+    const finalPf = (empPf !== undefined ? empPf : 1) * pf
+
     if (e.type === '月薪正職') {
       const hr = ftOTbase(e) / FT_DIV
       const otH = Math.max(0, totalH - eS)
       const otPay = noPunch ? null : ftOT(otH, hr)
       const extraAmt = att.extras ? (att.extras[e.id] || 0) : 0
       const gross = noPunch ? null : e.fixedSalary + (otPay || 0) + extraAmt
-      const weekStd = eS * pf
+      const weekStd = eS * finalPf
       const weekOtH = Math.max(0, totalH - weekStd)
       const weekOtPay = ftOT(weekOtH, hr)
       const pace = weekStd > 0 ? totalH / weekStd : 0
-      const propSal = e.fixedSalary * pf
-      const propIns = ins.total * pf
+      const propSal = e.fixedSalary * finalPf
+      const propIns = ins.total * finalPf
       const rule = ruleMap[e.id] || ''
       const attLoc = rule.includes('內場') ? '內場' : (rule ? '外場' : '')
       const loc2 = e.titleLoc || attLoc || '外場'
       const extraDetail = att.extrasDetail ? att.extrasDetail[e.id] : null
       return {
         ...e, totalH, noPunch, eStd: eS, hr, otH, otPay, gross, ins, rule, loc: loc2,
-        extra: extraAmt, extraDetail, propSal, propIns, propFactor: pf,
+        extra: extraAmt, extraDetail, propSal, propIns, propFactor: finalPf,
         weekStd, weekOtH, weekOtPay, pace, ptDailyOt: 0, b66: 0, bH: 0, rAddon: 0,
       }
     } else {
@@ -580,16 +630,16 @@ export function calcResults(
       let base = 0, dot = 0
       Object.values(dByE[e.id] || {}).forEach(dh => { base += dh * effRate; dot += ptOTP(dh, effRate) })
       const gross = base + dot + b66 + bH + extraAmt2
-      const projMonthH = pf > 0 && pf < 1 ? totalH / pf : totalH
+      const projMonthH = finalPf > 0 && finalPf < 1 ? totalH / finalPf : totalH
       const { b66: projB66, bH: projBH } = ptBonus(e.dept, projMonthH)
-      const propIns = ins.total * pf
+      const propIns = ins.total * finalPf
       const rule2 = ruleMap[e.id] || ''
       const attLoc2 = rule2.includes('內場') ? '內場' : (rule2 ? '外場' : '')
       const loc2 = e.titleLoc || attLoc2 || '外場'
       const extraDetail2 = att.extrasDetail ? att.extrasDetail[e.id] : null
       return {
         ...e, totalH, noPunch, eStd: 0, hr: effRate, otH: 0, otPay: dot, gross, ins,
-        rule: rule2, loc: loc2, propFactor: pf, extra: extraAmt2, extraDetail: extraDetail2,
+        rule: rule2, loc: loc2, propFactor: finalPf, extra: extraAmt2, extraDetail: extraDetail2,
         propSal: gross, propIns, weekStd: 0, weekOtH: 0, weekOtPay: dot, pace: 0,
         ptDailyOt: dot, b66, bH, rAddon, projBH, projB66,
       }
