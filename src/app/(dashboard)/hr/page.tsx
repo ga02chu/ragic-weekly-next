@@ -16,6 +16,13 @@ import {
 } from '@/lib/hr/calc'
 
 
+function rehydratePay(raw: HREmployee[]): HREmployee[] {
+  return raw.map(p => ({
+    ...p,
+    hireDate: p.hireDate ? new Date(p.hireDate as unknown as string) : null,
+    birthday: p.birthday ? new Date(p.birthday as unknown as string) : null,
+  }))
+}
 function rehydrateAtt(raw: AttResult): AttResult {
   const pd = (s: string) => { const m = String(s || '').match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/); return m ? new Date(+m[1], +m[2]-1, +m[3]) : null }
   return { ...raw, records: raw.records.map(r => ({ ...r, date: pd(r.dateStr) })) }
@@ -105,7 +112,7 @@ export default function HRPage() {
   useEffect(() => {
     try {
       const s = (k: string) => { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null }
-      const sp = s('hr_data_pay'); if (sp) { setPay(sp); setFileStatus(p => ({ ...p, pay: 'loaded' })) }
+      const sp = s('hr_data_pay'); if (sp) { setPay(rehydratePay(sp)); setFileStatus(p => ({ ...p, pay: 'loaded' })) }
       const sa = s('hr_data_att'); if (sa) { setAtt(rehydrateAtt(sa)); setFileStatus(p => ({ ...p, att: 'loaded' })) }
       const sl = s('hr_data_loc'); if (sl) { setLoc(rehydrateLoc(sl)); setFileStatus(p => ({ ...p, loc: 'loaded' })) }
       const sb = s('hr_data_brk'); if (sb) { setBrk(sb); setFileStatus(p => ({ ...p, brk: 'loaded' })) }
