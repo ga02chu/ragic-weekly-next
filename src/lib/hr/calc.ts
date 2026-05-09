@@ -767,7 +767,8 @@ export function adjDeltaForMonth(
 ): Record<string, { delta: number; name: string }> {
   const nameToId: Record<string, string> = {}
   pay.forEach(e => { if (e.name) nameToId[e.name.trim()] = e.id })
-  const deduct8 = ['特休', '事假', '公傷假', '公假']
+  // 假別比對（spec MD 第五條）
+  const deduct8 = ['特休', '事假', '公傷', '工傷', '公假', '喪假', '婚假']
   const deduct4 = ['病假', '生理假']
   const deltaByName: Record<string, number> = {}
   adj.forEach(r => {
@@ -866,15 +867,26 @@ export function calcResults(
 
     if (e.type === '月薪正職') {
       const hr = ftOTbase(e) / FT_DIV
-      const rawOtH = Math.max(0, totalH - eS)
+      // 總部人員不計打卡時數、不計加班費（spec MD 第十一條）
+      const isHQ = e.dept.includes('總部') || e.dept.includes('執行長') || e.titleLoc === '總部'
+      const rawOtH = isHQ ? 0 : Math.max(0, totalH - eS)
       // 換補休：從加班時數中扣（不扣已成正常工時的部分）
       const compH = compHIdMap[e.id] || 0
       const otH = Math.max(0, rawOtH - compH)
-      const otPay = noPunch ? null : ftOT(otH, hr)
-      const extraAmt = att.extras ? (att.extras[e.id] || 0) : 0
+      const otPay = (noPunch || isHQ) ? null : ftOT(otH, hr)
+      // 本月不足直接扣薪（時數不足扣回，code 1000）— 已含上月不足挪過來的時數
+      const shortageH = (noPunch || isHQ) ? 0 : Math.max(0, eS - totalH)
+      const shortageCut = Math.round(shortageH * hr)
+      let extraAmt = att.extras ? (att.extras[e.id] || 0) : 0
+      let extraDetail = att.extrasDetail ? [...(att.extrasDetail[e.id] || [])] : null
+      if (shortageCut > 0) {
+        extraAmt -= shortageCut
+        if (!extraDetail) extraDetail = []
+        extraDetail.push({ code: '1000', desc: '時數不足扣回', amt: -shortageCut, note: `${shortageH.toFixed(2)}H` })
+      }
       const gross = noPunch ? null : e.fixedSalary + (otPay || 0) + extraAmt
       const weekStd = eS * finalPf
-      const rawWeekOtH = Math.max(0, totalH - weekStd)
+      const rawWeekOtH = isHQ ? 0 : Math.max(0, totalH - weekStd)
       const weekOtH = Math.max(0, rawWeekOtH - compH)
       const weekOtPay = ftOT(weekOtH, hr)
       const pace = weekStd > 0 ? totalH / weekStd : 0
@@ -883,7 +895,6 @@ export function calcResults(
       const rule = ruleMap[e.id] || ''
       const attLoc = rule.includes('內場') ? '內場' : (rule ? '外場' : '')
       const loc2 = e.titleLoc || attLoc || '外場'
-      const extraDetail = att.extrasDetail ? att.extrasDetail[e.id] : null
       return {
         ...e, totalH, noPunch, eStd: eS, hr, otH, otPay, gross, ins, rule, loc: loc2,
         extra: extraAmt, extraDetail, propSal, propIns, propFactor: finalPf,
