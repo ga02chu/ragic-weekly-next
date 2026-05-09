@@ -399,28 +399,75 @@ export default function HRPage() {
       {/* 結果 */}
       {hasResult && (
         <>
+          {/* 本月套用的調整摘要 — 讓使用者一眼看到調整表有沒有被讀進來 */}
+          {(() => {
+            const sumExtraByCode = (code: string) => results.reduce((s, e) => {
+              const items = e.extraDetail?.filter(d => d.code === code) || []
+              return s + items.reduce((a, b) => a + b.amt, 0)
+            }, 0)
+            const countByCode = (code: string) => results.reduce((s, e) => s + (e.extraDetail?.some(d => d.code === code) ? 1 : 0), 0)
+            const proratedCount = results.filter(e => e.propFactor !== undefined && e.propFactor !== 1).length
+            const items = [
+              { label: '國定假日加給', val: sumExtraByCode('6002'), n: countByCode('6002'), source: '調整表 → 國定假日 sheet' },
+              { label: '加班換補休', val: sumExtraByCode('comp'), n: countByCode('comp'), source: '調整表 → 加班換補休 sheet' },
+              { label: '遲到扣考績', val: sumExtraByCode('5001'), n: countByCode('5001'), source: '調整表 → 遲到記錄 sheet' },
+              { label: '生日禮金', val: sumExtraByCode('9000'), n: results.filter(e => e.extraDetail?.some(d => d.code === '9000' && d.desc === '生日禮金')).length, source: '薪資表 → 生日欄位' },
+              { label: '外籍員工費率', val: 0, n: adj.foreigners.length, source: '調整表 → 外籍員工 sheet', noMoney: true },
+              { label: '新進/離職比例計薪', val: 0, n: proratedCount, source: '調整表 → 新進與離職 sheet', noMoney: true },
+            ]
+            return (
+              <div style={{ background: '#fef9c3', border: '1px solid #fde047', borderRadius: 12, padding: '14px 18px', marginBottom: 16 }}>
+                <div style={{ fontWeight: 600, color: '#713f12', fontSize: 13, marginBottom: 10 }}>📋 本月套用的調整（用來確認調整表有讀進來）</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8, fontSize: 12 }}>
+                  {items.map(it => (
+                    <div key={it.label} style={{ background: '#fff', borderRadius: 8, padding: '10px 12px', border: '1px solid #fde047' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                        <span style={{ fontWeight: 600, color: '#713f12' }}>{it.label}</span>
+                        <span style={{ color: it.n > 0 ? '#16a34a' : '#9ca3af', fontWeight: 600 }}>
+                          {it.n > 0 ? '✓' : '–'} {it.n} 人
+                        </span>
+                      </div>
+                      {!it.noMoney && it.n > 0 && (
+                        <div style={{ fontSize: 14, fontWeight: 700, color: '#1a2f4e', marginTop: 4 }}>{fT(it.val)}</div>
+                      )}
+                      <div style={{ fontSize: 10, color: '#a16207', marginTop: 4 }}>{it.source}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
+
           {/* 人事成本佔比明細 — 卡片版 */}
           {(() => {
             const salTotal = results.reduce((s, e) => s + (e.propSal || 0), 0)
             const otTotal = results.reduce((s, e) => s + (e.type === '月薪正職' ? (e.weekOtPay || 0) : 0), 0)
             const insTotal = results.reduce((s, e) => s + (e.propIns || 0), 0)
-            const holi2000 = results.reduce((s, e) => {
-              const items = e.extraDetail?.filter(d => d.code === '2000') || []
+            // 國定假日加倍：抓代碼 6002（修正以前抓錯成 2000=免稅加班費的問題）
+            const holi6002 = results.reduce((s, e) => {
+              const items = e.extraDetail?.filter(d => d.code === '6002') || []
               return s + items.reduce((a, b) => a + b.amt, 0)
             }, 0)
             const annual20032 = results.reduce((s, e) => {
               const items = e.extraDetail?.filter(d => d.code === '20032') || []
               return s + items.reduce((a, b) => a + b.amt, 0)
             }, 0)
-            const grandTotal = salTotal + otTotal + insTotal + holi2000 + annual20032
+            // 其他加扣（非已分類項目）
+            const COUNTED_CODES = new Set(['6002', '20032'])
+            const otherExtras = results.reduce((s, e) => {
+              const items = e.extraDetail?.filter(d => !COUNTED_CODES.has(d.code)) || []
+              return s + items.reduce((a, b) => a + b.amt, 0)
+            }, 0)
+            const grandTotal = salTotal + otTotal + insTotal + holi6002 + annual20032 + otherExtras
             const totalRev = chartData.reduce((s, d) => s + d.rev, 0)
             const pct = (v: number, base: number) => base > 0 ? `${(v / base * 100).toFixed(1)}%` : null
             const items: { label: string; val: number; icon: string; color: string }[] = [
               { label: '薪資', val: salTotal, icon: '💼', color: '#3b82f6' },
               { label: '加班費', val: otTotal, icon: '⏱️', color: '#f59e0b' },
               { label: '勞健保', val: insTotal, icon: '🏥', color: '#10b981' },
-              { label: '國定假日加倍', val: holi2000, icon: '🎉', color: '#8b5cf6' },
+              { label: '國定假日加給', val: holi6002, icon: '🎉', color: '#8b5cf6' },
               { label: '特休轉薪資', val: annual20032, icon: '🏖️', color: '#ec4899' },
+              { label: '其他加扣', val: otherExtras, icon: '📋', color: '#64748b' },
             ]
             const ratio = totalRev > 0 ? grandTotal / totalRev : 0
             return (
