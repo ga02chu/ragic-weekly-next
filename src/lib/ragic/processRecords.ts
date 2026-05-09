@@ -33,9 +33,12 @@ export function processRecords(
   const byStore: Record<string, StoreRecord> = {}
   const byDate: Record<string, number> = {}
 
+  const norm = (s: string) => s.toLowerCase().replace(/[\s\-_]/g, '')
   const getVal = (r: Record<string, unknown>, key: string): string => {
     const fieldName = fields[key] || key
-    return String(r[fieldName] || '')
+    if (r[fieldName] !== undefined) return String(r[fieldName] || '')
+    const match = Object.keys(r).find(k => norm(k) === norm(fieldName))
+    return match ? String(r[match] || '') : ''
   }
 
   for (const r of records) {

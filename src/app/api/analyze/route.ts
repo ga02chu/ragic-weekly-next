@@ -7,17 +7,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Missing logs' }, { status: 400 })
   }
 
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) {
+    return NextResponse.json({ error: '未設定 ANTHROPIC_API_KEY，請聯絡管理員' }, { status: 500 })
+  }
+
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY!,
+        'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1000,
+        max_tokens: 1500,
         messages: [{
           role: 'user',
           content: `你是一位餐飲顧問，請以老闆視角分析以下各分店值班主管日誌，用繁體中文輸出。
@@ -36,13 +41,21 @@ ${logs}
       })
     })
 
+    if (!response.ok) {
+      const errBody = await response.text()
+      console.error('[analyze] Anthropic HTTP error', response.status, errBody)
+      return NextResponse.json({ error: `API 回應 ${response.status}，請稍後再試` }, { status: 500 })
+    }
+
     const data = await response.json()
     if (data.error) {
-      return NextResponse.json({ error: data.error.message }, { status: 500 })
+      console.error('[analyze] Anthropic error', data.error)
+      return NextResponse.json({ error: data.error.message || JSON.stringify(data.error) }, { status: 500 })
     }
     return NextResponse.json({ text: data.content?.[0]?.text || '' })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
+    console.error('[analyze] fetch error', message)
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

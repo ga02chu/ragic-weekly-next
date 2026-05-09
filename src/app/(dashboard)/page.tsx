@@ -1,18 +1,62 @@
 'use client'
 
-import { useState, useCallback } from 'react'
-import { toISO, fmt, isHoliday } from '@/lib/ragic/utils'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import dynamic from 'next/dynamic'
+import { toISO, fmt } from '@/lib/ragic/utils'
 import { processRecords, filterByStoreType, StoreRecord } from '@/lib/ragic/processRecords'
+import { fetchAllRecords, getFields } from '@/lib/ragic/fetchRecords'
+
+const RevenueAreaChart = dynamic(
+  () => import('recharts').then(({ AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer }) =>
+    function RevenueAreaChart({ data }: { data: { date: string; rev: number }[] }) {
+      return (
+        <ResponsiveContainer width="100%" height={220}>
+          <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
+            <defs>
+              <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor={BRAND} stopOpacity={0.15} />
+                <stop offset="95%" stopColor={BRAND} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+            <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `$${fmt(v)}`} width={72} />
+            <Tooltip formatter={(v) => [`$${fmt(Number(v))}`, '營業額']} />
+            <Area type="monotone" dataKey="rev" stroke={BRAND} strokeWidth={2} fill="url(#revGrad)" dot={{ fill: BRAND, r: 3 }} />
+          </AreaChart>
+        </ResponsiveContainer>
+      )
+    }
+  ),
+  { ssr: false }
+)
+
+const StoreDonutChart = dynamic(
+  () => import('recharts').then(({ PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer }) =>
+    function StoreDonutChart({ data, colors }: { data: { name: string; value: number }[]; colors: string[] }) {
+      return (
+        <ResponsiveContainer width="100%" height={220}>
+          <PieChart>
+            <Pie data={data} cx="40%" cy="50%" innerRadius={55} outerRadius={85} dataKey="value" paddingAngle={2}>
+              {data.map((_, i) => <Cell key={i} fill={colors[i % colors.length]} />)}
+            </Pie>
+            <Legend layout="vertical" align="right" verticalAlign="middle"
+              formatter={(value) => <span style={{ fontSize: 11, color: '#374151' }}>{value}</span>} />
+            <Tooltip formatter={(v) => [`$${fmt(Number(v))}`, '營業額']} />
+          </PieChart>
+        </ResponsiveContainer>
+      )
+    }
+  ),
+  { ssr: false }
+)
 
 const BRAND = '#3c2929'
-const DEFAULT_FIELDS: Record<string, string> = {
-  date: '營業日期', store: '分店簡稱', revenue: '當日營業額',
-  guests: '用餐人數', groups: '用餐組數', noshow: 'No Show組數',
-  avgPay: '客單價', supervisor: '值班人員',
-  complaint: '當日客訴與事件處理', share: '當日其他事件分享',
-}
+const BRAND_LIGHT = '#f5efef'
+const COLORS = [BRAND, '#5c7a6e', '#8B6914', '#1e4d8c', '#6b4c8a', '#1a6b4a', '#7a3a1e', '#2d5a6b']
 
 type StoreFilter = 'all' | 'direct' | 'franchise'
+type SessionFilter = 'all' | 'noon' | 'evening'
 type RangeKey = 'thisweek' | 'lastweek' | 'thismonth' | 'lastmonth' | 'custom'
 
 function getRange(key: RangeKey) {
@@ -40,12 +84,7 @@ function diffBadge(curr: number, prev: number) {
   const pct = ((curr - prev) / prev * 100).toFixed(1)
   const up = curr >= prev
   return (
-    <span style={{
-      fontSize: 11, padding: '2px 6px', borderRadius: 20,
-      background: up ? '#dcfce7' : '#fee2e2',
-      color: up ? '#166534' : '#991b1b',
-      marginLeft: 6,
-    }}>
+    <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 20, background: up ? '#dcfce7' : '#fee2e2', color: up ? '#166534' : '#991b1b', marginLeft: 6 }}>
       {up ? '▲' : '▼'} {Math.abs(Number(pct))}%
     </span>
   )
@@ -57,71 +96,74 @@ export default function DashboardPage() {
   const [dateTo, setDateTo] = useState(initialRange.to)
   const [activeRange, setActiveRange] = useState<RangeKey>('thisweek')
   const [storeFilter, setStoreFilter] = useState<StoreFilter>('all')
+  const [sessionFilter, setSessionFilter] = useState<SessionFilter>('all')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [byStore, setByStore] = useState<Record<string, StoreRecord>>({})
   const [byDate, setByDate] = useState<Record<string, number>>({})
   const [prevByStore, setPrevByStore] = useState<Record<string, StoreRecord>>({})
+  const [targets, setTargets] = useState<Record<string, number>>({})
+  const [totalRecords, setTotalRecords] = useState(0)
 
-  const applyRange = useCallback((key: RangeKey) => {
-    if (key === 'custom') { setActiveRange(key); return }
-    const r = getRange(key)
-    setDateFrom(r.from)
-    setDateTo(r.to)
-    setActiveRange(key)
-  }, [])
+  const mounted = useRef(false)
 
-  const fetchData = useCallback(async () => {
-    if (!dateFrom || !dateTo) return
-    setLoading(true)
-    setError('')
+  const fetchData = useCallback(async (fromOverride?: string, toOverride?: string) => {
+    const f = fromOverride ?? dateFrom
+    const t = toOverride ?? dateTo
+    if (!f || !t) return
+    setLoading(true); setError('')
     try {
-      const settings = JSON.parse(localStorage.getItem('ragic_settings') || '{}')
-      const fields = { ...DEFAULT_FIELDS, ...JSON.parse(localStorage.getItem('ragic_fields') || '{}') }
+      const allRecords = await fetchAllRecords()
+      const fields = getFields()
 
-      const params = new URLSearchParams({ limit: '3000' })
-      if (settings.token) params.set('token', settings.token)
-      if (settings.path) params.set('path', settings.path)
-
-      const res = await fetch(`/api/ragic?${params}`)
-      const raw = await res.json()
-
-      const allRecords = Object.values(raw).filter((r): r is Record<string, unknown> =>
-        typeof r === 'object' && r !== null && !Array.isArray(r)
-      )
-
-      // 過濾日期
       const dateField = fields.date || '營業日期'
       const inRange = allRecords.filter(r => {
-        const d = String(r[dateField] || '')
-        const iso = d.replace(/\//g, '-').slice(0, 10)
-        return iso >= dateFrom && iso <= dateTo
+        const d = String(r[dateField] || '').replace(/\//g, '-').slice(0, 10)
+        return d >= f && d <= t
       })
 
-      // 上期
-      const from = new Date(dateFrom), to = new Date(dateTo)
+      const from = new Date(f), to = new Date(t)
       const diff = to.getTime() - from.getTime()
       const prevTo = new Date(from.getTime() - 86400000)
       const prevFrom = new Date(prevTo.getTime() - diff)
       const prevFromStr = toISO(prevFrom), prevToStr = toISO(prevTo)
 
       const prevRange = allRecords.filter(r => {
-        const d = String(r[dateField] || '')
-        const iso = d.replace(/\//g, '-').slice(0, 10)
-        return iso >= prevFromStr && iso <= prevToStr
+        const d = String(r[dateField] || '').replace(/\//g, '-').slice(0, 10)
+        return d >= prevFromStr && d <= prevToStr
       })
 
-      const processed = processRecords(inRange, fields)
-      const prevProcessed = processRecords(prevRange, fields)
-
+      const processed = processRecords(inRange, fields, sessionFilter)
+      const prevProcessed = processRecords(prevRange, fields, sessionFilter)
       setByStore(processed.byStore)
       setByDate(processed.byDate)
       setPrevByStore(prevProcessed.byStore)
+      setTotalRecords(inRange.length)
+
+      const m = new Date(f).getMonth() + 1
+      try {
+        const sheetRes = await fetch(`/api/sheets?month=${m}`)
+        if (sheetRes.ok) {
+          const sheetData = await sheetRes.json()
+          if (sheetData.targets) setTargets(sheetData.targets)
+        }
+      } catch { /* ignore */ }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : '載入失敗')
     }
     setLoading(false)
-  }, [dateFrom, dateTo])
+  }, [dateFrom, dateTo, sessionFilter])
+
+  const applyRange = useCallback((key: RangeKey) => {
+    if (key === 'custom') { setActiveRange(key); return }
+    const r = getRange(key)
+    setDateFrom(r.from); setDateTo(r.to); setActiveRange(key)
+    fetchData(r.from, r.to)
+  }, [fetchData])
+
+  useEffect(() => {
+    if (!mounted.current) { mounted.current = true; fetchData() }
+  }, [fetchData])
 
   const filtered = filterByStoreType(byStore, storeFilter)
   const prevFiltered = filterByStoreType(prevByStore, storeFilter)
@@ -132,47 +174,52 @@ export default function DashboardPage() {
   const prevTotalGuests = Object.values(prevFiltered).reduce((s, v) => s + v.guests, 0)
   const totalGroups = Object.values(filtered).reduce((s, v) => s + v.groups, 0)
   const prevTotalGroups = Object.values(prevFiltered).reduce((s, v) => s + v.groups, 0)
-  const allAvgPays = Object.values(filtered).flatMap(v => v.avgPays)
-  const avgPay = allAvgPays.length ? allAvgPays.reduce((s, v) => s + v, 0) / allAvgPays.length : 0
-  const prevAvgPays = Object.values(prevFiltered).flatMap(v => v.avgPays)
-  const prevAvgPay = prevAvgPays.length ? prevAvgPays.reduce((s, v) => s + v, 0) / prevAvgPays.length : 0
+  const totalNoshow = Object.values(filtered).reduce((s, v) => s + v.noshow, 0)
+  const prevTotalNoshow = Object.values(prevFiltered).reduce((s, v) => s + v.noshow, 0)
+  const noshowPct = totalGroups > 0 ? (totalNoshow / totalGroups * 100).toFixed(1) : '0.0'
 
-  const hasData = Object.keys(filtered).length > 0
+  const dateEntries = Object.entries(byDate).sort(([a], [b]) => a.localeCompare(b))
+  const daysElapsed = dateEntries.length || 1
+  const avgRevPerDay = totalRev / daysElapsed
+
+  // 預估月底
+  const monthTotalDays = new Date(new Date(dateFrom).getFullYear(), new Date(dateFrom).getMonth() + 1, 0).getDate()
+
+  const storeList = Object.entries(filtered).sort((a, b) => b[1].rev - a[1].rev)
+  const hasData = storeList.length > 0
+  const hasTargets = Object.keys(targets).length > 0
+
+  const trendData = dateEntries.map(([date, rev]) => ({ date: date.slice(5), rev }))
+  const donutData = storeList.map(([, s]) => ({ name: s.displayName, value: s.rev }))
+
+  const btnStyle = (active: boolean) => ({
+    padding: '5px 14px', borderRadius: 20, border: '1.5px solid',
+    borderColor: active ? BRAND : '#e5e7eb', background: active ? BRAND : '#fff',
+    color: active ? '#fff' : '#374151', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+  } as React.CSSProperties)
 
   return (
     <div style={{ padding: 24, maxWidth: 1400 }}>
-      {/* Topbar */}
-      <div style={{ marginBottom: 20 }}>
+      <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#1a2f4e', marginBottom: 12 }}>總覽</h1>
-
-        {/* 篩選 */}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {(['all', 'direct', 'franchise'] as StoreFilter[]).map(f => (
-            <button key={f} onClick={() => setStoreFilter(f)} style={{
-              padding: '5px 14px', borderRadius: 20, border: '1.5px solid',
-              borderColor: storeFilter === f ? BRAND : '#e5e7eb',
-              background: storeFilter === f ? BRAND : '#fff',
-              color: storeFilter === f ? '#fff' : '#374151',
-              fontSize: 12, fontWeight: 600, cursor: 'pointer',
-            }}>
+            <button key={f} onClick={() => setStoreFilter(f)} style={btnStyle(storeFilter === f)}>
               {f === 'all' ? '全部' : f === 'direct' ? '直營' : '加盟'}
             </button>
           ))}
-
-          <div style={{ width: 1, height: 20, background: '#e5e7eb', margin: '0 4px' }} />
-
+          <div style={{ width: 1, height: 20, background: '#e5e7eb' }} />
+          {(['all', 'noon', 'evening'] as SessionFilter[]).map(s => (
+            <button key={s} onClick={() => setSessionFilter(s)} style={btnStyle(sessionFilter === s)}>
+              {s === 'all' ? '全部時段' : s === 'noon' ? '中午' : '晚上'}
+            </button>
+          ))}
+          <div style={{ width: 1, height: 20, background: '#e5e7eb' }} />
           {(['thisweek', 'lastweek', 'thismonth', 'lastmonth', 'custom'] as RangeKey[]).map(r => (
-            <button key={r} onClick={() => applyRange(r)} style={{
-              padding: '5px 14px', borderRadius: 20, border: '1.5px solid',
-              borderColor: activeRange === r ? BRAND : '#e5e7eb',
-              background: activeRange === r ? BRAND : '#fff',
-              color: activeRange === r ? '#fff' : '#374151',
-              fontSize: 12, fontWeight: 600, cursor: 'pointer',
-            }}>
+            <button key={r} onClick={() => applyRange(r)} style={btnStyle(activeRange === r)}>
               {r === 'thisweek' ? '本週' : r === 'lastweek' ? '上週' : r === 'thismonth' ? '本月' : r === 'lastmonth' ? '上個月' : '自訂'}
             </button>
           ))}
-
           {activeRange === 'custom' && (
             <>
               <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
@@ -182,22 +229,17 @@ export default function DashboardPage() {
                 style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 12 }} />
             </>
           )}
-
-          <button onClick={fetchData} disabled={loading} style={{
+          <button onClick={() => fetchData()} disabled={loading} style={{
             padding: '7px 20px', borderRadius: 8, border: 'none',
-            background: loading ? '#9ca3af' : BRAND,
-            color: '#fff', fontSize: 13, fontWeight: 600, cursor: loading ? 'not-allowed' : 'pointer',
+            background: loading ? '#9ca3af' : BRAND, color: '#fff', fontSize: 13, fontWeight: 600,
+            cursor: loading ? 'not-allowed' : 'pointer',
           }}>
             {loading ? '載入中...' : '載入報表'}
           </button>
         </div>
       </div>
 
-      {error && (
-        <div style={{ background: '#fee2e2', color: '#991b1b', padding: '10px 16px', borderRadius: 8, marginBottom: 16, fontSize: 13 }}>
-          {error}
-        </div>
-      )}
+      {error && <div style={{ background: '#fee2e2', color: '#991b1b', padding: '10px 16px', borderRadius: 8, marginBottom: 16, fontSize: 13 }}>{error}</div>}
 
       {!hasData && !loading && (
         <div style={{ textAlign: 'center', padding: 60, color: '#9ca3af' }}>
@@ -210,78 +252,136 @@ export default function DashboardPage() {
       {hasData && (
         <>
           {/* KPI 卡片 */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 20 }}>
-            {[
-              { label: '總營業額', value: `$${fmt(totalRev)}`, prev: prevTotalRev, curr: totalRev },
-              { label: '用餐人數', value: `${fmt(totalGuests)} 人`, prev: prevTotalGuests, curr: totalGuests },
-              { label: '用餐組數', value: `${fmt(totalGroups)} 組`, prev: prevTotalGroups, curr: totalGroups },
-              { label: '平均客單價', value: `$${fmt(avgPay)}`, prev: prevAvgPay, curr: avgPay },
-            ].map(kpi => (
-              <div key={kpi.label} style={{
-                background: '#fff', borderRadius: 12, padding: '16px 20px',
-                border: '1px solid #e8e6e1',
-              }}>
-                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>{kpi.label}</div>
-                <div style={{ fontSize: 24, fontWeight: 700, color: '#1a2f4e', display: 'flex', alignItems: 'center' }}>
-                  {kpi.value}
-                  {diffBadge(kpi.curr, kpi.prev)}
-                </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 16 }}>
+            {/* 主要卡片 - 期間總營業額 */}
+            <div style={{ background: BRAND_LIGHT, borderRadius: 12, padding: '16px 20px', border: `1px solid ${BRAND}22` }}>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>期間總營業額</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: '#1a2f4e', display: 'flex', alignItems: 'center', flexWrap: 'wrap' }}>
+                ${fmt(totalRev)}{diffBadge(totalRev, prevTotalRev)}
               </div>
-            ))}
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>日均 ${fmt(avgRevPerDay)}</div>
+            </div>
+            <div style={{ background: '#fff', borderRadius: 12, padding: '16px 20px', border: '1px solid #e8e6e1' }}>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>總用餐人數</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: '#1a2f4e', display: 'flex', alignItems: 'center' }}>
+                {fmt(totalGuests)}{diffBadge(totalGuests, prevTotalGuests)}
+              </div>
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>共 {fmt(totalGroups)} 組</div>
+            </div>
+            <div style={{ background: '#fff', borderRadius: 12, padding: '16px 20px', border: '1px solid #e8e6e1' }}>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>No Show 組數</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: '#1a2f4e', display: 'flex', alignItems: 'center' }}>
+                {fmt(totalNoshow)}{diffBadge(totalNoshow, prevTotalNoshow)}
+              </div>
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>占訂單 {noshowPct}%</div>
+            </div>
+            <div style={{ background: '#fff', borderRadius: 12, padding: '16px 20px', border: '1px solid #e8e6e1' }}>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>查詢分店數</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: '#1a2f4e' }}>{storeList.length}</div>
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>共 {totalRecords} 筆資料</div>
+            </div>
           </div>
 
-          {/* 各分店概覽 */}
-          <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', overflow: 'hidden' }}>
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid #e8e6e1', fontWeight: 600, color: '#1a2f4e' }}>
-              各分店概覽
+          {/* 月份保底業績卡片 */}
+          {hasTargets && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12, marginBottom: 16 }}>
+              {Object.entries(targets).map(([storeName, target]) => {
+                const storeEntry = storeList.find(([, s]) => s.displayName === storeName || s.displayName.includes(storeName) || storeName.includes(s.displayName.replace(/（加盟）/, '')))
+                const actual = storeEntry ? storeEntry[1].rev : 0
+                const projected = daysElapsed > 0 ? actual / daysElapsed * monthTotalDays : 0
+                const pct = target > 0 ? actual / target * 100 : 0
+                const projPct = target > 0 ? projected / target * 100 : 0
+                const gap = actual - target
+                const barPct = Math.min(100, pct)
+                return (
+                  <div key={storeName} style={{ background: '#fff', borderRadius: 12, padding: '14px 16px', border: '1px solid #e8e6e1' }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: '#1a2f4e', marginBottom: 10 }}>{storeName}</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                      <span style={{ color: '#6b7280' }}>實際營業額</span>
+                      <span style={{ fontWeight: 600 }}>${fmt(actual)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                      <span style={{ color: '#6b7280' }}>月目標</span>
+                      <span style={{ color: '#9ca3af' }}>${fmt(target)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 10 }}>
+                      <span style={{ color: '#6b7280' }}>預估月底</span>
+                      <span style={{ color: projected >= target ? '#16a34a' : '#d97706', fontWeight: 600 }}>${fmt(projected)}</span>
+                    </div>
+                    <div style={{ position: 'relative', height: 6, background: '#f3f4f6', borderRadius: 3, marginBottom: 6 }}>
+                      <div style={{ position: 'absolute', height: '100%', width: `${Math.min(100, projPct).toFixed(1)}%`, background: '#d4b8b8', borderRadius: 3 }} />
+                      <div style={{ position: 'absolute', height: '100%', width: `${barPct.toFixed(1)}%`, background: BRAND, borderRadius: 3 }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#9ca3af' }}>
+                      <span>{pct.toFixed(1)}%</span>
+                      <span style={{ color: gap >= 0 ? '#16a34a' : '#991b1b' }}>
+                        {gap >= 0 ? '▲' : '▼'} 差距 ${fmt(Math.abs(gap))} · 預估達成 {projPct.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
+          )}
+
+          {/* 圖表列 */}
+          <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 12, marginBottom: 16 }}>
+            {/* 折線圖 */}
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '16px 20px' }}>
+              <div style={{ fontWeight: 600, color: '#1a2f4e', marginBottom: 12 }}>每日營業額趨勢</div>
+              <RevenueAreaChart data={trendData} />
+            </div>
+
+            {/* 甜甜圈圖 */}
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '16px 20px' }}>
+              <div style={{ fontWeight: 600, color: '#1a2f4e', marginBottom: 12 }}>各分店佔比</div>
+              <StoreDonutChart data={donutData} colors={COLORS} />
+            </div>
+          </div>
+
+          {/* 各分店概覽表格 */}
+          <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', overflow: 'hidden' }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid #e8e6e1', fontWeight: 600, color: '#1a2f4e' }}>各分店概覽</div>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: '#fafaf8' }}>
-                    {['分店', '營業額', '環比', '用餐人數', '用餐組數', 'No Show', '客單價'].map(h => (
+                    {['分店', '類型', '營業額', '用餐人數', '用餐組數', 'No Show', '客單價', '環比狀態'].map(h => (
                       <th key={h} style={{ padding: '10px 16px', textAlign: h === '分店' ? 'left' : 'right', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {Object.entries(filtered).sort((a, b) => b[1].rev - a[1].rev).map(([name, s]) => {
+                  {storeList.map(([name, s]) => {
                     const prev = prevFiltered[name]
-                    const storeAvg = s.avgPays.length ? s.avgPays.reduce((a, b) => a + b, 0) / s.avgPays.length : 0
+                    const avg = s.avgPays.length ? s.avgPays.reduce((a, b) => a + b, 0) / s.avgPays.length : 0
+                    const revChange = prev?.rev ? (s.rev - prev.rev) / prev.rev * 100 : null
+                    const statusBadge = revChange === null
+                      ? <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: '#f3f4f6', color: '#6b7280' }}>無對比</span>
+                      : revChange >= 5
+                        ? <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: '#dcfce7', color: '#166534' }}>↑ 成長</span>
+                        : revChange <= -5
+                          ? <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: '#fee2e2', color: '#991b1b' }}>↓ 衰退</span>
+                          : <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: '#fef3c7', color: '#92400e' }}>→ 持平</span>
                     return (
                       <tr key={name} style={{ borderBottom: '1px solid #f0eee9' }}>
                         <td style={{ padding: '10px 16px', fontWeight: 600 }}>{s.displayName}</td>
-                        <td style={{ padding: '10px 16px', textAlign: 'right' }}>${fmt(s.rev)}</td>
-                        <td style={{ padding: '10px 16px', textAlign: 'right' }}>{prev ? diffBadge(s.rev, prev.rev) : '–'}</td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right' }}>
+                          {s.type === 'franchise'
+                            ? <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: '#ede9fe', color: '#5b21b6' }}>加盟</span>
+                            : <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: BRAND_LIGHT, color: BRAND }}>直營</span>}
+                        </td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right' }}>${fmt(s.rev)} {prev ? diffBadge(s.rev, prev.rev) : null}</td>
                         <td style={{ padding: '10px 16px', textAlign: 'right' }}>{fmt(s.guests)}</td>
                         <td style={{ padding: '10px 16px', textAlign: 'right' }}>{fmt(s.groups)}</td>
-                        <td style={{ padding: '10px 16px', textAlign: 'right' }}>{fmt(s.noshow)}</td>
-                        <td style={{ padding: '10px 16px', textAlign: 'right' }}>${fmt(storeAvg)}</td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right' }}>{fmt(s.noshow)} 組</td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right' }}>${fmt(avg)}</td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right' }}>{statusBadge}</td>
                       </tr>
                     )
                   })}
                 </tbody>
               </table>
-            </div>
-          </div>
-
-          {/* 每日趨勢 */}
-          <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '16px 20px', marginTop: 12 }}>
-            <div style={{ fontWeight: 600, color: '#1a2f4e', marginBottom: 12 }}>每日趨勢</div>
-            <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 80 }}>
-              {Object.entries(byDate).sort(([a], [b]) => a.localeCompare(b)).map(([date, rev]) => {
-                const maxRev = Math.max(...Object.values(byDate))
-                const h = maxRev > 0 ? (rev / maxRev) * 70 : 0
-                const holiday = isHoliday(date)
-                return (
-                  <div key={date} title={`${date}: $${fmt(rev)}`} style={{
-                    flex: 1, height: `${h}px`, minHeight: 4,
-                    background: holiday ? '#8B6914' : BRAND,
-                    borderRadius: '3px 3px 0 0', cursor: 'pointer',
-                    opacity: 0.85,
-                  }} />
-                )
-              })}
             </div>
           </div>
         </>

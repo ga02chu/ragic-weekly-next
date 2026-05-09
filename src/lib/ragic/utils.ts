@@ -4,6 +4,7 @@ export const BRAND_COLOR = '#3c2929'
 export const DEFAULT_FIELDS: Record<string, string> = {
   date: '營業日期',
   store: '分店簡稱',
+  session: '營業時間',
   revenue: '當日營業額',
   guests: '用餐人數',
   groups: '用餐組數',
@@ -11,6 +12,7 @@ export const DEFAULT_FIELDS: Record<string, string> = {
   avgPay: '客單價',
   supervisor: '值班人員',
   complaint: '當日客訴與事件處理',
+  food: '當日食材狀況反應',
   share: '當日其他事件分享',
 }
 
