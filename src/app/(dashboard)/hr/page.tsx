@@ -8,8 +8,11 @@ import { fmt } from '@/lib/ragic/utils'
 import {
   parsePay, parseAtt, parseLoc, parseAdj, parseBreak, buildBreakMap,
   adjDeltaForMonth, adjExtrasForMonth, empPfForMonth, calcResults, computeStoreDist,
+  holidayPayForMonth, compHoursForMonth, latePenaltyForMonth, birthdayBonusForMonth,
+  foreignerIdsFromNames, mergeExtras, emptyAdj,
   fT, fH,
-  type HREmployee, type AttResult, type LocRecord, type AdjRecord, type BreakRecord, type CalcResult,
+  type HREmployee, type AttResult, type LocRecord, type BreakRecord, type CalcResult,
+  type ParsedAdjustments,
 } from '@/lib/hr/calc'
 
 
@@ -21,12 +24,33 @@ function rehydrateLoc(raw: LocRecord[]): LocRecord[] {
   const pd = (s: string) => { const m = String(s || '').match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/); return m ? new Date(+m[1], +m[2]-1, +m[3]) : null }
   return raw.map(r => ({ ...r, date: pd(r.dateStr) }))
 }
-function rehydrateAdj(raw: AdjRecord[]): AdjRecord[] {
-  return raw.map(r => ({
-    ...r,
-    startDate: r.startDate ? new Date(r.startDate as unknown as string) : null,
-    endDate: r.endDate ? new Date(r.endDate as unknown as string) : null,
-  }))
+function rehydrateAdj(raw: unknown): ParsedAdjustments {
+  // 舊格式（陣列）轉新格式
+  if (Array.isArray(raw)) {
+    return {
+      records: raw.map(r => ({
+        ...r,
+        startDate: r.startDate ? new Date(r.startDate) : null,
+        endDate: r.endDate ? new Date(r.endDate) : null,
+      })),
+      holidays: [], lates: {}, compHours: {}, foreigners: [],
+    }
+  }
+  const obj = raw as ParsedAdjustments
+  return {
+    records: (obj.records || []).map(r => ({
+      ...r,
+      startDate: r.startDate ? new Date(r.startDate as unknown as string) : null,
+      endDate: r.endDate ? new Date(r.endDate as unknown as string) : null,
+    })),
+    holidays: (obj.holidays || []).map(h => ({
+      ...h,
+      date: h.date ? new Date(h.date as unknown as string) : null,
+    })),
+    lates: obj.lates || {},
+    compHours: obj.compHours || {},
+    foreigners: obj.foreigners || [],
+  }
 }
 
 const BRAND = '#3c2929'
@@ -71,7 +95,7 @@ export default function HRPage() {
   const [pay, setPay] = useState<HREmployee[]>([])
   const [att, setAtt] = useState<AttResult | null>(null)
   const [loc, setLoc] = useState<LocRecord[]>([])
-  const [adj, setAdj] = useState<AdjRecord[]>([])
+  const [adj, setAdj] = useState<ParsedAdjustments>(emptyAdj)
   const [brk, setBrk] = useState<BreakRecord[]>([])
   const [fileStatus, setFileStatus] = useState<Record<FileKey, FileStatus>>({ pay: 'idle', att: 'idle', loc: 'idle', adj: 'idle', brk: 'idle' })
   const [parseErr, setParseErr] = useState<Record<FileKey, string>>({ pay: '', att: '', loc: '', adj: '', brk: '' })
@@ -105,7 +129,7 @@ export default function HRPage() {
       if (key === 'pay') { parsed = parsePay(wb); setPay(parsed as HREmployee[]) }
       else if (key === 'att') { parsed = parseAtt(wb); setAtt(parsed as AttResult) }
       else if (key === 'loc') { parsed = parseLoc(wb); setLoc(parsed as LocRecord[]) }
-      else if (key === 'adj') { parsed = parseAdj(wb); setAdj(parsed as AdjRecord[]) }
+      else if (key === 'adj') { parsed = parseAdj(wb); setAdj(parsed as ParsedAdjustments) }
       else { parsed = parseBreak(wb); setBrk(parsed as BreakRecord[]) }
       setFileStatus(prev => ({ ...prev, [key]: 'loaded' }))
       try {
@@ -138,27 +162,37 @@ export default function HRPage() {
         pf = Math.min(1, periodDays / totalDays)
       }
 
-      const adjMap = adjDeltaForMonth(year, month, adj, pay)
+      const adjMap = adjDeltaForMonth(year, month, adj.records, pay)
 
-      // 把調整表的「其他加扣項目」併入 att 的 extras / extrasDetail
-      const adjEx = adjExtrasForMonth(adj, pay)
-      const mergedAtt: AttResult = {
-        ...att,
-        extras: { ...att.extras },
-        extrasDetail: Object.fromEntries(Object.entries(att.extrasDetail).map(([k, v]) => [k, [...v]])),
-      }
-      Object.entries(adjEx.extras).forEach(([id, amt]) => {
-        mergedAtt.extras[id] = (mergedAtt.extras[id] || 0) + amt
-      })
-      Object.entries(adjEx.details).forEach(([id, items]) => {
-        if (!mergedAtt.extrasDetail[id]) mergedAtt.extrasDetail[id] = []
-        mergedAtt.extrasDetail[id].push(...items)
-      })
+      // 把所有來源的 extras 全部 merge 在一起
+      const breakMap = buildBreakMap(brk)
+      const lateRes = latePenaltyForMonth(adj.lates, pay)
+      const merged = mergeExtras(
+        // 舊：att 的加扣項
+        { extras: att.extras || {}, details: att.extrasDetail || {} },
+        // 調整表 其他加扣
+        adjExtrasForMonth(adj.records, pay) as { extras: Record<string, number>; details: Record<string, { code: string; desc: string; amt: number; note: string }[]> },
+        // 國定假日加給
+        holidayPayForMonth(adj.holidays, pay, att, breakMap),
+        // 加班換補休
+        compHoursForMonth(adj.compHours, pay),
+        // 遲到扣考績（FT）
+        lateRes.extras,
+        // 生日禮金
+        birthdayBonusForMonth(year, month, pay),
+      )
+      const mergedAtt: AttResult = { ...att, extras: merged.extras, extrasDetail: merged.details }
 
       // 新進/離職的個別比例
-      const empPfMap = empPfForMonth(year, month, adj, pay)
+      const empPfMap = empPfForMonth(year, month, adj.records, pay)
 
-      const result = calcResults(sDate, eDate, storeFilter, stdH, pf, adjMap, excludeMgmt, locFilter, pay, mergedAtt, loc, {}, buildBreakMap(brk), empPfMap)
+      // 外籍員工 id set
+      const foreignerIds = foreignerIdsFromNames(adj.foreigners, pay)
+
+      const result = calcResults(
+        sDate, eDate, storeFilter, stdH, pf, adjMap, excludeMgmt, locFilter,
+        pay, mergedAtt, loc, {}, breakMap, empPfMap, foreignerIds, lateRes.ptZeroIds,
+      )
       setCalcResult(result)
       const dist = computeStoreDist(result.results, result.locR)
       setStoreDist(dist)
@@ -256,7 +290,14 @@ export default function HRPage() {
             ))}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 11, color: '#9ca3af', flexWrap: 'wrap' }}>
-            <span>已載入：薪資 {pay.length} 筆 · 出勤 {att?.records.length || 0} 筆 · 打卡 {loc.length} 筆 · 休息 {brk.length} 筆 · 調整 {adj.length} 筆</span>
+            <span>
+              已載入：薪資 {pay.length} 筆 · 出勤 {att?.records.length || 0} 筆 · 打卡 {loc.length} 筆 · 休息 {brk.length} 筆
+              {' · 調整：'}請假/到離職/加扣 {adj.records.length} 筆
+              {adj.holidays.length > 0 && ` · 國定假日 ${adj.holidays.length} 天`}
+              {Object.keys(adj.lates).length > 0 && ` · 遲到 ${Object.keys(adj.lates).length} 人`}
+              {Object.keys(adj.compHours).length > 0 && ` · 換補休 ${Object.keys(adj.compHours).length} 人`}
+              {adj.foreigners.length > 0 && ` · 外籍 ${adj.foreigners.length} 人`}
+            </span>
             {savedAt && (
               <span style={{ color: '#16a34a', fontSize: 11 }}>
                 ✓ 上次記憶：{new Date(savedAt).toLocaleDateString('zh-TW')} {new Date(savedAt).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })}

@@ -14,6 +14,8 @@ export interface HREmployee {
   fixedSalary: number
   lbB: number; vocB: number; penB: number; hbB: number
   type: '月薪正職' | '時薪工讀' | '未設定'
+  hireDate: Date | null
+  birthday: Date | null
 }
 
 export interface AttRecord {
@@ -40,6 +42,22 @@ export interface LocRecord {
 export interface AdjRecord {
   name: string; type: string; days: number
   startDate: Date | null; endDate: Date | null
+}
+
+export interface HolidayEntry {
+  dateStr: string; date: Date | null; name: string; multiplier: number
+}
+
+export interface ParsedAdjustments {
+  records: AdjRecord[]
+  holidays: HolidayEntry[]
+  lates: Record<string, { count: number; mins: number }>
+  compHours: Record<string, number>
+  foreigners: string[]
+}
+
+export const emptyAdj: ParsedAdjustments = {
+  records: [], holidays: [], lates: {}, compHours: {}, foreigners: [],
 }
 
 export interface BreakRecord {
@@ -137,8 +155,11 @@ function fuzzyCol(hdr: string[], keyword: string): number {
 }
 
 // ── Insurance ──────────────────────────────────────────────────────────────
-function calcIns(e: HREmployee): Insurance {
-  const lb = (e.lbB || 0) * R.lb
+const FOREIGN_LB_RATE = 0.0805 // 11.5% × 70% (不含就業保險)
+
+function calcIns(e: HREmployee, isForeigner = false): Insurance {
+  const lbRate = isForeigner ? FOREIGN_LB_RATE : R.lb
+  const lb = (e.lbB || 0) * lbRate
   const voc = (e.vocB || 0) * R.voc
   const rsv = (e.lbB || 0) * R.rsv
   const pen = (e.penB || 0) * R.pen
@@ -198,6 +219,8 @@ export function parsePay(wb: XLSX.WorkBook): HREmployee[] {
   const lbAmtIdx = fC('勞保投保金額'), vocAmtIdx = fC('職保投保金額')
   const penAmtIdx = fC('勞退投保金額'), hbAmtIdx = fC('健保投保金額')
   const titleIdx = hdr.indexOf('職稱')
+  const hireIdx = fC('到職日')
+  const birthIdx = fC('生日')
 
   return rows.slice(hi + 1).filter(r => String(r[0]).trim().startsWith('N')).map(r => {
     const bs = +r[3] || 0, hr = +r[5] || 0, meal = +r[4] || 0, mgmt = +r[6] || 0, housing = +r[7] || 0
@@ -218,6 +241,8 @@ export function parsePay(wb: XLSX.WorkBook): HREmployee[] {
       penB: penAmtIdx >= 0 ? +r[penAmtIdx] || 0 : 0,
       hbB: hbAmtIdx >= 0 ? +r[hbAmtIdx] || 0 : 0,
       type: (bs > 0 ? '月薪正職' : hr > 0 ? '時薪工讀' : '未設定') as HREmployee['type'],
+      hireDate: hireIdx >= 0 ? parseLeaveDate(r[hireIdx]) : null,
+      birthday: birthIdx >= 0 ? parseLeaveDate(r[birthIdx]) : null,
     }
   })
 }
@@ -337,90 +362,181 @@ export function parseLoc(wb: XLSX.WorkBook): LocRecord[] {
 }
 
 // ── parseAdj ───────────────────────────────────────────────────────────────
-export function parseAdj(wb: XLSX.WorkBook): AdjRecord[] {
-  const records: AdjRecord[] = []
-  const addLeave = (name: string, type: string, days: number, startDate: Date | null, endDate: Date | null) => {
-    name = name.replace(/（範例）/g, '').trim()
+function findSheet(wb: XLSX.WorkBook, ...keywords: string[]): XLSX.WorkSheet | null {
+  const name = wb.SheetNames.find(n => keywords.some(k => n.includes(k)))
+  return name ? wb.Sheets[name] : null
+}
+
+// 找 header row：要求「整格」剛好等於某個 needle（避免「說明」段落誤判）
+function findHeaderRow(rows: unknown[][], ...needles: string[]): number {
+  return rows.findIndex(r =>
+    (r as unknown[]).some(c => needles.includes(String(c || '').trim()))
+  )
+}
+
+const isHeaderName = (name: string) => name === '姓名' || name === '人員姓名' || !name
+
+export function parseAdj(wb: XLSX.WorkBook): ParsedAdjustments {
+  const out: ParsedAdjustments = { records: [], holidays: [], lates: {}, compHours: {}, foreigners: [] }
+  const cleanName = (s: unknown) => String(s || '').replace(/（範例）/g, '').trim()
+  const addRec = (name: string, type: string, days: number, sd: Date | null, ed: Date | null) => {
     if (!name || name === '姓名' || name.includes('範例')) return
-    if (name && type && (days !== 0 || type === '到職' || type === '離職'))
-      records.push({ name, type, days, startDate, endDate })
+    if (type && (days !== 0 || type === '到職' || type === '離職')) {
+      out.records.push({ name, type, days, startDate: sd, endDate: ed })
+    }
   }
 
-  const isMulti = wb.SheetNames.some(n => ['上個月不足', '本月請假', '新進人員', '離職人員'].includes(n))
-  if (isMulti) {
-    const s1 = wb.Sheets['上個月不足']
-    if (s1) {
-      const r = XLSX.utils.sheet_to_json(s1, { header: 1, defval: '' }) as string[][]
-      const hi = r.findIndex(row => row.some(c => String(c).trim() === '姓名'))
-      r.slice(Math.max(hi, 0) + 1).forEach(row => {
-        const name = String(row[0] || '').trim()
-        const h = parseFloat(row[1])
-        if (name && !isNaN(h) && h > 0) addLeave(name, '前月不足', h, null, null)
-      })
-    }
-    const s2 = wb.Sheets['本月請假']
-    if (s2) {
-      const r = XLSX.utils.sheet_to_json(s2, { header: 1, defval: '' }) as unknown[][]
-      const hi = r.findIndex(row => (row as string[]).some(c => String(c).trim() === '假別'))
-      r.slice(Math.max(hi, 0) + 1).forEach(row => {
-        const rr = row as unknown[]
-        const name = String(rr[0] || '').trim()
-        const type = String(rr[1] || '').trim()
-        const days = parseFloat(String(rr[4] || ''))
-        if (name && type && !isNaN(days) && days > 0)
-          addLeave(name, type, days, parseLeaveDate(rr[2]), parseLeaveDate(rr[3]))
-      })
-    }
-    const s3 = wb.Sheets['新進人員']
-    if (s3) {
-      const r = XLSX.utils.sheet_to_json(s3, { header: 1, defval: '' }) as unknown[][]
-      const hi = r.findIndex(row => (row as string[]).some(c => String(c).trim() === '到職日期'))
-      r.slice(Math.max(hi, 0) + 1).forEach(row => {
-        const rr = row as unknown[]
-        const name = String(rr[0] || '').trim()
-        const d = parseLeaveDate(rr[1])
-        if (name && d) addLeave(name, '到職', 0, d, null)
-      })
-    }
-    const s4 = wb.Sheets['離職人員']
-    if (s4) {
-      const r = XLSX.utils.sheet_to_json(s4, { header: 1, defval: '' }) as unknown[][]
-      const hi = r.findIndex(row => (row as string[]).some(c => String(c).trim() === '最後上班日'))
-      r.slice(Math.max(hi, 0) + 1).forEach(row => {
-        const rr = row as unknown[]
-        const name = String(rr[0] || '').trim()
-        const d = parseLeaveDate(rr[1])
-        if (name && d) addLeave(name, '離職', 0, d, null)
-      })
-    }
-    const s5 = wb.Sheets['其他加扣項目']
-    if (s5) {
-      const r = XLSX.utils.sheet_to_json(s5, { header: 1, defval: '' }) as unknown[][]
-      const hi = r.findIndex(row => (row as string[]).some(c => String(c).trim() === '金額'))
-      r.slice(Math.max(hi, 0) + 1).forEach(row => {
-        const rr = row as unknown[]
-        const name = String(rr[0] || '').trim()
-        const amt = parseFloat(String(rr[2] || ''))
-        if (name && !isNaN(amt) && amt !== 0) addLeave(name, '加扣項目', amt, null, null)
-      })
-    }
-  } else {
-    const ws = wb.Sheets[wb.SheetNames[0]]
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as unknown[][]
-    let hi = rows.findIndex(r => (r as string[]).some(c => String(c).trim() === '假別'))
-    if (hi < 0) hi = 0
-    const hdr = (rows[hi] as string[]).map(c => String(c).trim())
-    const C = (n: string) => hdr.indexOf(n)
-    const [cn, ct, cs, ce, cd] = [C('姓名'), C('假別'), C('開始日期'), C('結束日期'), C('請假天數（或不足時數）')]
-    rows.slice(hi + 1).filter(r => String((r as string[])[cn] || '').trim()).forEach(r => {
-      const rr = r as unknown[]
-      const name = String(rr[cn]).trim()
-      const type = String(rr[ct] || '').trim()
-      const days = parseFloat(String(rr[cd] || '')) || 0
-      addLeave(name, type, days, parseLeaveDate(rr[cs]), parseLeaveDate(rr[ce]))
+  // 1. 上個月不足
+  const sShort = findSheet(wb, '上個月不足', '上月不足', '不足')
+  if (sShort) {
+    const r = XLSX.utils.sheet_to_json(sShort, { header: 1, defval: '' }) as unknown[][]
+    const hi = findHeaderRow(r, '姓名')
+    r.slice(Math.max(hi, 0) + 1).forEach(row => {
+      const name = cleanName(row[0])
+      const h = parseFloat(String(row[1] || ''))
+      if (name && !isNaN(h) && h > 0) addRec(name, '前月不足', h, null, null)
     })
   }
-  return records
+
+  // 2. 本月請假
+  const sLeave = findSheet(wb, '本月請假', '請假')
+  if (sLeave) {
+    const r = XLSX.utils.sheet_to_json(sLeave, { header: 1, defval: '' }) as unknown[][]
+    const hi = findHeaderRow(r, '假別')
+    r.slice(Math.max(hi, 0) + 1).forEach(row => {
+      const name = cleanName(row[0])
+      const type = String(row[1] || '').trim()
+      const days = parseFloat(String(row[4] || ''))
+      if (name && type && !isNaN(days) && days > 0) {
+        addRec(name, type, days, parseLeaveDate(row[2]), parseLeaveDate(row[3]))
+      }
+    })
+  }
+
+  // 3. 新進與離職（合併或分頁）
+  const sHire = findSheet(wb, '新進與離職')
+  if (sHire) {
+    const r = XLSX.utils.sheet_to_json(sHire, { header: 1, defval: '' }) as unknown[][]
+    const hi = findHeaderRow(r, '到職日', '離職日')
+    r.slice(Math.max(hi, 0) + 1).forEach(row => {
+      const name = cleanName(row[0])
+      if (!name) return
+      const hireD = parseLeaveDate(row[1])
+      const leaveD = parseLeaveDate(row[2])
+      if (hireD) addRec(name, '到職', 0, hireD, null)
+      if (leaveD) addRec(name, '離職', 0, leaveD, null)
+    })
+  } else {
+    // 舊格式：兩個分頁分開
+    const sH = findSheet(wb, '新進人員', '新進')
+    if (sH) {
+      const r = XLSX.utils.sheet_to_json(sH, { header: 1, defval: '' }) as unknown[][]
+      const hi = findHeaderRow(r, '到職日', '到職日期')
+      r.slice(Math.max(hi, 0) + 1).forEach(row => {
+        const name = cleanName(row[0])
+        const d = parseLeaveDate(row[1])
+        if (name && d) addRec(name, '到職', 0, d, null)
+      })
+    }
+    const sL = findSheet(wb, '離職人員', '離職')
+    if (sL) {
+      const r = XLSX.utils.sheet_to_json(sL, { header: 1, defval: '' }) as unknown[][]
+      const hi = findHeaderRow(r, '最後上班日', '離職日')
+      r.slice(Math.max(hi, 0) + 1).forEach(row => {
+        const name = cleanName(row[0])
+        const d = parseLeaveDate(row[1])
+        if (name && d) addRec(name, '離職', 0, d, null)
+      })
+    }
+  }
+
+  // 4. 其他加扣（其他加扣項目）
+  const sExtra = findSheet(wb, '其他加扣')
+  if (sExtra) {
+    const r = XLSX.utils.sheet_to_json(sExtra, { header: 1, defval: '' }) as unknown[][]
+    const hi = findHeaderRow(r, '金額')
+    r.slice(Math.max(hi, 0) + 1).forEach(row => {
+      const name = cleanName(row[0])
+      // 表頭：姓名 / 科目代碼 / 項目說明 / 金額（金額在第 4 欄 = index 3）
+      const amt = parseFloat(String(row[3] || row[2] || ''))
+      if (name && !isNaN(amt) && amt !== 0) addRec(name, '加扣項目', amt, null, null)
+    })
+  }
+
+  // 5. 國定假日
+  const sHoli = findSheet(wb, '國定假日', '假日')
+  if (sHoli) {
+    const r = XLSX.utils.sheet_to_json(sHoli, { header: 1, defval: '' }) as unknown[][]
+    const hi = findHeaderRow(r, '日期')
+    r.slice(Math.max(hi, 0) + 1).forEach(row => {
+      const date = parseLeaveDate(row[0])
+      if (!date) return
+      const name = String(row[1] || '').trim()
+      const mult = parseFloat(String(row[2] || '2')) || 2
+      const dateStr = `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`
+      out.holidays.push({ dateStr, date, name, multiplier: mult })
+    })
+  }
+
+  // 6. 遲到記錄
+  const sLate = findSheet(wb, '遲到')
+  if (sLate) {
+    const r = XLSX.utils.sheet_to_json(sLate, { header: 1, defval: '' }) as unknown[][]
+    const hi = findHeaderRow(r, '遲到次數', '累積遲到分鐘')
+    r.slice(Math.max(hi, 0) + 1).forEach(row => {
+      const name = cleanName(row[0])
+      if (isHeaderName(name)) return
+      const cnt = parseFloat(String(row[1] || '')) || 0
+      const mins = parseFloat(String(row[2] || '')) || 0
+      if (name && (cnt > 0 || mins > 0)) out.lates[name] = { count: cnt, mins }
+    })
+  }
+
+  // 7. 加班換補休
+  const sComp = findSheet(wb, '換補休', '補休')
+  if (sComp) {
+    const r = XLSX.utils.sheet_to_json(sComp, { header: 1, defval: '' }) as unknown[][]
+    const hi = findHeaderRow(r, '換補休時數', '補休時數', '時數')
+    r.slice(Math.max(hi, 0) + 1).forEach(row => {
+      const name = cleanName(row[0])
+      if (isHeaderName(name)) return
+      const h = parseFloat(String(row[1] || '')) || 0
+      if (name && h > 0) out.compHours[name] = (out.compHours[name] || 0) + h
+    })
+  }
+
+  // 8. 外籍員工
+  const sFor = findSheet(wb, '外籍')
+  if (sFor) {
+    const r = XLSX.utils.sheet_to_json(sFor, { header: 1, defval: '' }) as unknown[][]
+    const hi = findHeaderRow(r, '姓名')
+    r.slice(Math.max(hi, 0) + 1).forEach(row => {
+      const name = cleanName(row[0])
+      if (isHeaderName(name)) return
+      if (name) out.foreigners.push(name)
+    })
+  }
+
+  // Fallback: 單頁、舊格式（只有請假）
+  if (out.records.length === 0 && !sShort && !sLeave && !sHire && !sExtra) {
+    const ws = wb.Sheets[wb.SheetNames[0]]
+    if (ws) {
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as unknown[][]
+      const hi = findHeaderRow(rows, '假別')
+      const hdr = (rows[Math.max(hi, 0)] as string[]).map(c => String(c).trim())
+      const C = (n: string) => hdr.indexOf(n)
+      const [cn, ct, cs, ce, cd] = [C('姓名'), C('假別'), C('開始日期'), C('結束日期'), C('請假天數（或不足時數）')]
+      rows.slice(Math.max(hi, 0) + 1).filter(r => cn >= 0 && String((r as string[])[cn] || '').trim()).forEach(r => {
+        const rr = r as unknown[]
+        const name = cleanName(rr[cn])
+        const type = String(rr[ct] || '').trim()
+        const days = parseFloat(String(rr[cd] || '')) || 0
+        addRec(name, type, days, parseLeaveDate(rr[cs]), parseLeaveDate(rr[ce]))
+      })
+    }
+  }
+
+  return out
 }
 
 // ── parseBreak ─────────────────────────────────────────────────────────────
@@ -454,6 +570,33 @@ export function buildBreakMap(breaks: BreakRecord[]): Record<string, number> {
     map[key] = (map[key] || 0) + r.mins / 60
   })
   return map
+}
+
+// ── ExtrasResult helper type ────────────────────────────────────────────────
+type ExtraItem = { code: string; desc: string; amt: number; note: string }
+export interface ExtrasResult {
+  extras: Record<string, number>
+  details: Record<string, ExtraItem[]>
+}
+const emptyExtras = (): ExtrasResult => ({ extras: {}, details: {} })
+
+function addExtra(out: ExtrasResult, id: string, item: ExtraItem) {
+  if (!item.amt) return
+  out.extras[id] = (out.extras[id] || 0) + item.amt
+  if (!out.details[id]) out.details[id] = []
+  out.details[id].push(item)
+}
+
+export function mergeExtras(...all: ExtrasResult[]): ExtrasResult {
+  const out = emptyExtras()
+  for (const e of all) {
+    Object.entries(e.extras).forEach(([id, amt]) => { out.extras[id] = (out.extras[id] || 0) + amt })
+    Object.entries(e.details).forEach(([id, items]) => {
+      if (!out.details[id]) out.details[id] = []
+      out.details[id].push(...items)
+    })
+  }
+  return out
 }
 
 // ── adjExtrasForMonth ───────────────────────────────────────────────────────
@@ -499,6 +642,112 @@ export function empPfForMonth(
     }
   })
   return result
+}
+
+// ── 國定假日加給（工讀）─────────────────────────────────────────────────────
+export function holidayPayForMonth(
+  holidays: HolidayEntry[], pay: HREmployee[],
+  att: AttResult, breakMap: Record<string, number>
+): ExtrasResult {
+  const out = emptyExtras()
+  if (!holidays.length) return out
+  const holiMult: Record<string, number> = {}
+  holidays.forEach(h => { if (h.dateStr) holiMult[h.dateStr] = h.multiplier || 2 })
+  const empById = Object.fromEntries(pay.map(e => [e.id, e]))
+  // 累加每位工讀員工在國定假日當天的加給
+  const acc: Record<string, { amt: number; days: number }> = {}
+  att.records.forEach(p => {
+    if (!p.dateStr || !(p.dateStr in holiMult)) return
+    const e = empById[p.id]
+    if (!e || e.type !== '時薪工讀') return
+    const breakH = breakMap[`${p.id}:${p.dateStr}`] || 0
+    const netH = Math.max(0, p.hours - breakH)
+    if (netH <= 0) return
+    const mult = holiMult[p.dateStr]
+    const amt = Math.round(netH * e.hourlyRate * (mult - 1))
+    if (amt <= 0) return
+    if (!acc[p.id]) acc[p.id] = { amt: 0, days: 0 }
+    acc[p.id].amt += amt
+    acc[p.id].days += 1
+  })
+  Object.entries(acc).forEach(([id, { amt, days }]) => {
+    addExtra(out, id, { code: '6002', desc: '國定假日加給', amt, note: `${days}天` })
+  })
+  return out
+}
+
+// ── 加班換補休（FT/PT 都扣加班費）──────────────────────────────────────────
+export function compHoursForMonth(
+  compHours: Record<string, number>, pay: HREmployee[]
+): ExtrasResult {
+  const out = emptyExtras()
+  const nameToEmp: Record<string, HREmployee> = {}
+  pay.forEach(e => { if (e.name) nameToEmp[e.name] = e })
+  Object.entries(compHours).forEach(([name, hrs]) => {
+    if (!hrs || hrs <= 0) return
+    const e = nameToEmp[name]
+    if (!e) return
+    let rate = 0
+    if (e.type === '月薪正職') rate = ftOTbase(e) / FT_DIV
+    else if (e.type === '時薪工讀') rate = e.hourlyRate
+    if (rate <= 0) return
+    const amt = -Math.round(hrs * rate * 1.34)
+    addExtra(out, e.id, { code: 'comp', desc: '加班換補休', amt, note: `${hrs.toFixed(2)}H` })
+  })
+  return out
+}
+
+// ── 遲到扣考績／扣加給 ──────────────────────────────────────────────────────
+export function latePenaltyForMonth(
+  lates: Record<string, { count: number; mins: number }>, pay: HREmployee[]
+): { extras: ExtrasResult; ptZeroIds: Set<string> } {
+  const out = emptyExtras()
+  const ptZeroIds = new Set<string>()
+  const nameToEmp: Record<string, HREmployee> = {}
+  pay.forEach(e => { if (e.name) nameToEmp[e.name] = e })
+  Object.entries(lates).forEach(([name, { count, mins }]) => {
+    const e = nameToEmp[name]
+    if (!e) return
+    const triggered = count >= 4 || mins >= 20
+    if (!triggered) return
+    if (e.type === '月薪正職') {
+      addExtra(out, e.id, { code: '5001', desc: '遲到扣考績', amt: -2000, note: `${count}次/${mins}分` })
+    } else if (e.type === '時薪工讀') {
+      ptZeroIds.add(e.id)
+    }
+  })
+  return { extras: out, ptZeroIds }
+}
+
+// ── 生日禮金（正職）────────────────────────────────────────────────────────
+// 計算月份 = M，發放給生日在 M+1 月的正職員工
+export function birthdayBonusForMonth(year: number, month: number, pay: HREmployee[]): ExtrasResult {
+  const out = emptyExtras()
+  const targetMonth = month === 12 ? 1 : month + 1
+  pay.forEach(e => {
+    if (e.type !== '月薪正職') return
+    if (!e.birthday || !e.hireDate) return
+    if (e.birthday.getMonth() + 1 !== targetMonth) return
+    // 生日當年到下次生日時到職滿幾年
+    const bdayYear = targetMonth === 1 ? year + 1 : year
+    let years = bdayYear - e.hireDate.getFullYear()
+    const hireMD = (e.hireDate.getMonth() + 1) * 100 + e.hireDate.getDate()
+    const bdayMD = (e.birthday.getMonth() + 1) * 100 + e.birthday.getDate()
+    if (bdayMD < hireMD) years -= 1
+    let amt = 0
+    if (years >= 2) amt = 2000
+    else if (years >= 1) amt = 1000
+    if (amt > 0) addExtra(out, e.id, { code: '9000', desc: '生日禮金', amt, note: `到職${years}年` })
+  })
+  return out
+}
+
+// ── 外籍員工 id set ────────────────────────────────────────────────────────
+export function foreignerIdsFromNames(foreigners: string[], pay: HREmployee[]): Set<string> {
+  const set = new Set<string>()
+  const names = new Set(foreigners.map(s => s.trim()))
+  pay.forEach(e => { if (names.has(e.name)) set.add(e.id) })
+  return set
 }
 
 // ── adjDeltaForMonth ────────────────────────────────────────────────────────
@@ -558,7 +807,9 @@ export function calcResults(
   loc: LocRecord[],
   ovr: Record<string, number> = {},
   breakMap: Record<string, number> = {},
-  empPfMap: Record<string, { pf: number; reason: string }> = {}
+  empPfMap: Record<string, { pf: number; reason: string }> = {},
+  foreignerIds: Set<string> = new Set(),
+  ptZeroIds: Set<string> = new Set()
 ): CalcResult {
   const recs = att.records.filter(p => p.date && p.date >= sDate && p.date <= eDate)
   const locR = loc.filter(p => p.date && p.date >= sDate && p.date <= eDate)
@@ -595,7 +846,7 @@ export function calcResults(
     return true
   }).map(e => {
     const totalH = hByE[e.id] || 0, noPunch = !punchIds.has(e.id)
-    const ins = calcIns(e)
+    const ins = calcIns(e, foreignerIds.has(e.id))
     const eS = effStd(e.id, stdH, adjMap, ovr, pay)
 
     // 個別員工比例（新進/離職）× 全域 pf（週期模式）
@@ -625,13 +876,20 @@ export function calcResults(
       }
     } else {
       const extraAmt2 = att.extras ? (att.extras[e.id] || 0) : 0
-      const { b66, rAddon, bH } = ptBonus(e.dept, totalH)
+      const rawBonus = ptBonus(e.dept, totalH)
+      // 遲到觸發：所有工讀加給歸零
+      const isLatePenalty = ptZeroIds.has(e.id)
+      const b66 = isLatePenalty ? 0 : rawBonus.b66
+      const rAddon = isLatePenalty ? 0 : rawBonus.rAddon
+      const bH = isLatePenalty ? 0 : rawBonus.bH
       const effRate = e.hourlyRate + rAddon
       let base = 0, dot = 0
       Object.values(dByE[e.id] || {}).forEach(dh => { base += dh * effRate; dot += ptOTP(dh, effRate) })
       const gross = base + dot + b66 + bH + extraAmt2
       const projMonthH = finalPf > 0 && finalPf < 1 ? totalH / finalPf : totalH
-      const { b66: projB66, bH: projBH } = ptBonus(e.dept, projMonthH)
+      const projRaw = ptBonus(e.dept, projMonthH)
+      const projB66 = isLatePenalty ? 0 : projRaw.b66
+      const projBH = isLatePenalty ? 0 : projRaw.bH
       const propIns = ins.total * finalPf
       const rule2 = ruleMap[e.id] || ''
       const attLoc2 = rule2.includes('內場') ? '內場' : (rule2 ? '外場' : '')
