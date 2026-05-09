@@ -8,7 +8,7 @@ import { fmt } from '@/lib/ragic/utils'
 import {
   parsePay, parseAtt, parseLoc, parseAdj, parseBreak, buildBreakMap,
   adjDeltaForMonth, adjExtrasForMonth, empPfForMonth, calcResults, computeStoreDist,
-  holidayPayForMonth, compHoursForMonth, latePenaltyForMonth, birthdayBonusForMonth,
+  holidayPayForMonth, compHoursIdMap, latePenaltyForMonth, birthdayBonusForMonth,
   foreignerIdsFromNames, mergeExtras, emptyAdj,
   fT, fH,
   type HREmployee, type AttResult, type LocRecord, type BreakRecord, type CalcResult,
@@ -174,8 +174,6 @@ export default function HRPage() {
         adjExtrasForMonth(adj.records, pay) as { extras: Record<string, number>; details: Record<string, { code: string; desc: string; amt: number; note: string }[]> },
         // 國定假日加給
         holidayPayForMonth(adj.holidays, pay, att, breakMap),
-        // 加班換補休
-        compHoursForMonth(adj.compHours, pay),
         // 遲到扣考績（FT）
         lateRes.extras,
         // 生日禮金
@@ -189,9 +187,12 @@ export default function HRPage() {
       // 外籍員工 id set
       const foreignerIds = foreignerIdsFromNames(adj.foreigners, pay)
 
+      // 加班換補休：傳 id map 進 calcResults 內，依實際 otH 扣（沒加班費就不扣）
+      const compHIdM = compHoursIdMap(adj.compHours, pay)
+
       const result = calcResults(
         sDate, eDate, storeFilter, stdH, pf, adjMap, excludeMgmt, locFilter,
-        pay, mergedAtt, loc, {}, breakMap, empPfMap, foreignerIds, lateRes.ptZeroIds,
+        pay, mergedAtt, loc, {}, breakMap, empPfMap, foreignerIds, lateRes.ptZeroIds, compHIdM,
       )
       setCalcResult(result)
       const dist = computeStoreDist(result.results, result.locR)

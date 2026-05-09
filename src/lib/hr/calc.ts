@@ -693,23 +693,16 @@ export function holidayPayForMonth(
   return out
 }
 
-// ── 加班換補休（FT/PT 都扣加班費）──────────────────────────────────────────
-export function compHoursForMonth(
+// ── 加班換補休：把姓名 map 轉成 id map（calcResults 內依 otH 才能精準扣）──
+export function compHoursIdMap(
   compHours: Record<string, number>, pay: HREmployee[]
-): ExtrasResult {
-  const out = emptyExtras()
-  const nameToEmp: Record<string, HREmployee> = {}
-  pay.forEach(e => { if (e.name) nameToEmp[e.name] = e })
+): Record<string, number> {
+  const nameToId: Record<string, string> = {}
+  pay.forEach(e => { if (e.name) nameToId[e.name] = e.id })
+  const out: Record<string, number> = {}
   Object.entries(compHours).forEach(([name, hrs]) => {
-    if (!hrs || hrs <= 0) return
-    const e = nameToEmp[name]
-    if (!e) return
-    let rate = 0
-    if (e.type === '月薪正職') rate = ftOTbase(e) / FT_DIV
-    else if (e.type === '時薪工讀') rate = e.hourlyRate
-    if (rate <= 0) return
-    const amt = -Math.round(hrs * rate * 1.34)
-    addExtra(out, e.id, { code: 'comp', desc: '加班換補休', amt, note: `${hrs.toFixed(2)}H` })
+    const id = nameToId[name]
+    if (id && hrs > 0) out[id] = (out[id] || 0) + hrs
   })
   return out
 }
@@ -826,7 +819,8 @@ export function calcResults(
   breakMap: Record<string, number> = {},
   empPfMap: Record<string, { pf: number; reason: string }> = {},
   foreignerIds: Set<string> = new Set(),
-  ptZeroIds: Set<string> = new Set()
+  ptZeroIds: Set<string> = new Set(),
+  compHIdMap: Record<string, number> = {}
 ): CalcResult {
   const recs = att.records.filter(p => p.date && p.date >= sDate && p.date <= eDate)
   const locR = loc.filter(p => p.date && p.date >= sDate && p.date <= eDate)
@@ -872,12 +866,16 @@ export function calcResults(
 
     if (e.type === '月薪正職') {
       const hr = ftOTbase(e) / FT_DIV
-      const otH = Math.max(0, totalH - eS)
+      const rawOtH = Math.max(0, totalH - eS)
+      // 換補休：從加班時數中扣（不扣已成正常工時的部分）
+      const compH = compHIdMap[e.id] || 0
+      const otH = Math.max(0, rawOtH - compH)
       const otPay = noPunch ? null : ftOT(otH, hr)
       const extraAmt = att.extras ? (att.extras[e.id] || 0) : 0
       const gross = noPunch ? null : e.fixedSalary + (otPay || 0) + extraAmt
       const weekStd = eS * finalPf
-      const weekOtH = Math.max(0, totalH - weekStd)
+      const rawWeekOtH = Math.max(0, totalH - weekStd)
+      const weekOtH = Math.max(0, rawWeekOtH - compH)
       const weekOtPay = ftOT(weekOtH, hr)
       const pace = weekStd > 0 ? totalH / weekStd : 0
       const propSal = e.fixedSalary * finalPf
