@@ -170,11 +170,17 @@ function calcIns(e: HREmployee, isForeigner = false): Insurance {
 }
 
 // ── PT bonus ───────────────────────────────────────────────────────────────
-function ptBonus(dept: string, h: number): { b66: number; rAddon: number; bH: number } {
-  const isE = dept === '英洙家'
+// spec 第三條工讀加給規則：
+//   料韓男各店，職稱含「資深」且時數 ≥ 66H → 每小時 +10 元
+//   英洙家，時數 ≥ 66H → 固定 +600 元
+//   資深 OR 英洙家，時數 ≥ 100H → +1,000 元
+function ptBonus(emp: HREmployee, h: number): { b66: number; rAddon: number; bH: number } {
+  const isE = emp.dept === '英洙家'
+  const isSenior = (emp.title || '').includes('資深')
   let b66 = 0, rAddon = 0
-  if (isE) { if (h >= 66) b66 = 600 } else { if (h >= 66) rAddon = 10 }
-  const bH = h >= 100 ? 1000 : 0
+  if (isE) { if (h >= 66) b66 = 600 }
+  else { if (h >= 66 && isSenior) rAddon = 10 }
+  const bH = ((isSenior || isE) && h >= 100) ? 1000 : 0
   return { b66, rAddon, bH }
 }
 
@@ -862,8 +868,21 @@ export function calcResults(
     const eS = effStd(e.id, stdH, adjMap, ovr, pay)
 
     // 個別員工比例（新進/離職）× 全域 pf（週期模式）
-    const empPf = empPfMap[e.id]?.pf
+    const empPfEntry = empPfMap[e.id]
+    const empPf = empPfEntry?.pf
     const finalPf = (empPf !== undefined ? empPf : 1) * pf
+
+    // 健保特殊規則（spec 第四條）：
+    //   新進：健保全月（不按比例）
+    //   離職未滿月：健保 = 0
+    //   離職當月最後一天：全月（finalPf=1）
+    const isNewHire = empPfEntry?.reason?.startsWith('新進') ?? false
+    const isMidLeave = (empPfEntry?.reason?.startsWith('離職') ?? false) && finalPf < 1
+    const calcPropIns = (): number => {
+      if (isNewHire) return (ins.total - ins.hb) * finalPf + ins.hb
+      if (isMidLeave) return (ins.total - ins.hb) * finalPf  // 健保歸零
+      return ins.total * finalPf
+    }
 
     if (e.type === '月薪正職') {
       const hr = ftOTbase(e) / FT_DIV
@@ -891,7 +910,7 @@ export function calcResults(
       const weekOtPay = ftOT(weekOtH, hr)
       const pace = weekStd > 0 ? totalH / weekStd : 0
       const propSal = e.fixedSalary * finalPf
-      const propIns = ins.total * finalPf
+      const propIns = calcPropIns()
       const rule = ruleMap[e.id] || ''
       const attLoc = rule.includes('內場') ? '內場' : (rule ? '外場' : '')
       const loc2 = e.titleLoc || attLoc || '外場'
@@ -902,7 +921,7 @@ export function calcResults(
       }
     } else {
       const extraAmt2 = att.extras ? (att.extras[e.id] || 0) : 0
-      const rawBonus = ptBonus(e.dept, totalH)
+      const rawBonus = ptBonus(e, totalH)
       // 遲到觸發：所有工讀加給歸零
       const isLatePenalty = ptZeroIds.has(e.id)
       const b66 = isLatePenalty ? 0 : rawBonus.b66
@@ -913,10 +932,10 @@ export function calcResults(
       Object.values(dByE[e.id] || {}).forEach(dh => { base += dh * effRate; dot += ptOTP(dh, effRate) })
       const gross = base + dot + b66 + bH + extraAmt2
       const projMonthH = finalPf > 0 && finalPf < 1 ? totalH / finalPf : totalH
-      const projRaw = ptBonus(e.dept, projMonthH)
+      const projRaw = ptBonus(e, projMonthH)
       const projB66 = isLatePenalty ? 0 : projRaw.b66
       const projBH = isLatePenalty ? 0 : projRaw.bH
-      const propIns = ins.total * finalPf
+      const propIns = calcPropIns()
       const rule2 = ruleMap[e.id] || ''
       const attLoc2 = rule2.includes('內場') ? '內場' : (rule2 ? '外場' : '')
       const loc2 = e.titleLoc || attLoc2 || '外場'
