@@ -1,7 +1,8 @@
 import * as XLSX from 'xlsx'
 
 // ── 保費費率（雇主負擔）────────────────────────────────────────────────────
-export const R = { lb: 0.0875, voc: 0.00195, rsv: 0.00025, pen: 0.06, hb: 0.0484 }
+// 註：職保費率依行業類別不同，餐飲業實際約 0.17%
+export const R = { lb: 0.0875, voc: 0.0017, rsv: 0.00025, pen: 0.06, hb: 0.0484 }
 const FT_DIV = 240
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -42,6 +43,7 @@ export interface LocRecord {
 export interface AdjRecord {
   name: string; type: string; days: number
   startDate: Date | null; endDate: Date | null
+  code?: string  // 加扣項目專用：科目代碼
 }
 
 export interface HolidayEntry {
@@ -452,15 +454,21 @@ export function parseAdj(wb: XLSX.WorkBook): ParsedAdjustments {
   }
 
   // 4. 其他加扣（其他加扣項目）
+  // spec：科目代碼 7004=股東分紅(不計人事成本)、8000=扣項(正數轉負)、其他加項保持正
   const sExtra = findSheet(wb, '其他加扣')
   if (sExtra) {
     const r = XLSX.utils.sheet_to_json(sExtra, { header: 1, defval: '' }) as unknown[][]
     const hi = findHeaderRow(r, '金額')
     r.slice(Math.max(hi, 0) + 1).forEach(row => {
       const name = cleanName(row[0])
-      // 表頭：姓名 / 科目代碼 / 項目說明 / 金額（金額在第 4 欄 = index 3）
+      const code = String(row[1] || '').trim()
       const amt = parseFloat(String(row[3] || row[2] || ''))
-      if (name && !isNaN(amt) && amt !== 0) addRec(name, '加扣項目', amt, null, null)
+      if (!name || isHeaderName(name) || isNaN(amt) || amt === 0) return
+      if (code === '7004') return  // 股東分紅不計入人事成本
+      // 8000 扣項：正數轉負；其他保持原符號
+      const finalAmt = code === '8000' ? -Math.abs(amt) : amt
+      const rec: AdjRecord = { name, type: '加扣項目', days: finalAmt, startDate: null, endDate: null, code }
+      out.records.push(rec)
     })
   }
 
@@ -602,6 +610,11 @@ export function mergeExtras(...all: ExtrasResult[]): ExtrasResult {
 
 // ── adjExtrasForMonth ───────────────────────────────────────────────────────
 // 把調整表的「其他加扣項目」轉成 {empId: 金額/明細} 以便併入 gross_pay
+const ADJ_CODE_DESC: Record<string, string> = {
+  '6000': '加給', '6004': '人力不足加給', '8000': '扣項-其他',
+  '9000': '加項-其他', '5000': '住宿津貼', '20032': '不休假代金-特休',
+  '7001': '年終獎金', '6002': '國定假日加給',
+}
 export function adjExtrasForMonth(
   adj: AdjRecord[], pay: HREmployee[]
 ): { extras: Record<string, number>; details: Record<string, { code: string; desc: string; amt: number; note: string }[]> } {
@@ -613,9 +626,12 @@ export function adjExtrasForMonth(
     if (r.type !== '加扣項目') return
     const id = nameToId[r.name]
     if (!id) return
-    extras[id] = (extras[id] || 0) + r.days  // adj 表 加扣項目 用 days 欄存金額
+    const amt = r.days  // 加扣項目用 days 欄存金額
+    extras[id] = (extras[id] || 0) + amt
     if (!details[id]) details[id] = []
-    details[id].push({ code: 'adj', desc: '調整表加扣項', amt: r.days, note: '' })
+    const code = r.code || 'adj'
+    const desc = ADJ_CODE_DESC[code] || `調整表加扣項(${code})`
+    details[id].push({ code, desc, amt, note: '' })
   })
   return { extras, details }
 }
