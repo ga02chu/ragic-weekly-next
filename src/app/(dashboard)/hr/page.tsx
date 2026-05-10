@@ -96,6 +96,18 @@ export default function HRPage() {
   const [stdH, setStdH] = useState(() => getMonthlyStdH(now.getFullYear(), now.getMonth() + 1))
 
   useEffect(() => { setStdH(getMonthlyStdH(year, month)) }, [year, month])
+
+  // 進入週報模式且日期未設定 → 自動帶入「本月至今」
+  useEffect(() => {
+    if (viewMode !== 'week') return
+    if (dateFrom && dateTo) return
+    const today = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const y = today.getFullYear(), m = today.getMonth() + 1
+    setYear(y); setMonth(m)
+    setDateFrom(`${y}-${pad(m)}-01`)
+    setDateTo(`${y}-${pad(m)}-${pad(today.getDate())}`)
+  }, [viewMode, dateFrom, dateTo])
   const [excludeMgmt, setExcludeMgmt] = useState(false)
   const [resultTab, setResultTab] = useState<ResultTab>('employees')
 
@@ -160,11 +172,13 @@ export default function HRPage() {
       const totalDays = monthEnd.getDate()
       let sDate: Date, eDate: Date, pf: number
 
-      if (viewMode === 'month' || (!dateFrom && !dateTo)) {
+      if (viewMode === 'month') {
         sDate = monthStart; eDate = monthEnd; pf = 1
       } else {
+        // 週報模式：日期空時預設「本月 1 號到今天」
+        const today = new Date()
         let s = dateFrom ? new Date(dateFrom) : monthStart
-        let e = dateTo ? new Date(dateTo) : monthEnd
+        let e = dateTo ? new Date(dateTo) : (today < monthEnd ? today : monthEnd)
         // 裁切到選定月份：避免跨月範圍使 pf 被夾為 1
         if (s < monthStart) s = monthStart
         if (e > monthEnd) e = monthEnd
