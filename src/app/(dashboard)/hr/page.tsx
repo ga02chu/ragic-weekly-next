@@ -116,6 +116,9 @@ export default function HRPage() {
   const [loc, setLoc] = useState<LocRecord[]>([])
   const [adj, setAdj] = useState<ParsedAdjustments>(emptyAdj)
   const [brk, setBrk] = useState<BreakRecord[]>([])
+  // 區塊摺疊狀態
+  const [uploadOpen, setUploadOpen] = useState(true)
+  const [adjSummaryOpen, setAdjSummaryOpen] = useState(false)
   const [fileStatus, setFileStatus] = useState<Record<FileKey, FileStatus>>({ pay: 'idle', att: 'idle', loc: 'idle', adj: 'idle', brk: 'idle' })
   const [parseErr, setParseErr] = useState<Record<FileKey, string>>({ pay: '', att: '', loc: '', adj: '', brk: '' })
   const [savedAt, setSavedAt] = useState<number | null>(null)
@@ -423,12 +426,20 @@ export default function HRPage() {
         </div>
       )}
 
-      {/* 2. 上傳區域 */}
+      {/* 2. 上傳區域（可摺疊） */}
       <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', marginBottom: 16 }}>
-        <div style={{ padding: '14px 20px', borderBottom: '1px solid #e8e6e1', fontWeight: 600, color: '#1a2f4e', fontSize: 14 }}>
-          Excel 檔案上傳
+        <div onClick={() => setUploadOpen(o => !o)}
+          style={{ padding: '14px 20px', borderBottom: uploadOpen ? '1px solid #e8e6e1' : 'none', fontWeight: 600, color: '#1a2f4e', fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, userSelect: 'none' }}>
+          <span style={{ fontSize: 12, transition: 'transform .2s', transform: uploadOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+          <span>Excel 檔案上傳</span>
+          {!uploadOpen && (
+            <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 400, marginLeft: 'auto' }}>
+              已載入 薪資 {pay.length} · 出勤 {att?.records.length || 0} · 打卡 {loc.length} · 休息 {brk.length} · 調整 {adj.records.length}
+              {savedAt && ` · ✓ 上次記憶 ${new Date(savedAt).toLocaleDateString('zh-TW')}`}
+            </span>
+          )}
         </div>
-        <div style={{ padding: '16px 20px' }}>
+        {uploadOpen && <div style={{ padding: '16px 20px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 10 }}>
             {([
               { key: 'pay' as FileKey, label: '薪資表（必填）' },
@@ -468,7 +479,7 @@ export default function HRPage() {
               </span>
             )}
           </div>
-        </div>
+        </div>}
       </div>
 
       {/* 3. 計算設定（篩選區間） */}
@@ -510,34 +521,6 @@ export default function HRPage() {
                 <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
                   style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 12 }} />
               </div>
-              <div>
-                <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>常用區間（自動依今天）</div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button onClick={() => {
-                    const today = new Date()
-                    const pad = (n: number) => String(n).padStart(2, '0')
-                    const y = today.getFullYear(), m = today.getMonth() + 1
-                    // 把上方的年/月也一起切到今天的月，這樣 stdH 等資料才會正確帶入
-                    setYear(y); setMonth(m)
-                    setDateFrom(`${y}-${pad(m)}-01`)
-                    setDateTo(`${y}-${pad(m)}-${pad(today.getDate())}`)
-                  }} style={btnStyle(false)}>本月至今</button>
-                  <button onClick={() => {
-                    const today = new Date()
-                    const pad = (n: number) => String(n).padStart(2, '0')
-                    const y = today.getFullYear(), m = today.getMonth() + 1
-                    const dow = today.getDay() // 0=Sun
-                    const lastSun = new Date(today); lastSun.setDate(today.getDate() - (dow === 0 ? 7 : dow))
-                    // 上週日若跨到上個月，就只取本月那段
-                    const sunInThisMonth = lastSun.getMonth() + 1 === m && lastSun.getFullYear() === y
-                    setYear(y); setMonth(m)
-                    setDateFrom(`${y}-${pad(m)}-01`)
-                    setDateTo(sunInThisMonth
-                      ? `${y}-${pad(m)}-${pad(lastSun.getDate())}`
-                      : `${y}-${pad(m)}-01`)
-                  }} style={btnStyle(false)}>月初至上週日</button>
-                </div>
-              </div>
             </>
           )}
           <div>
@@ -576,6 +559,42 @@ export default function HRPage() {
             {computing ? '計算中...' : '開始計算'}
           </button>
         </div>
+        {viewMode === 'week' && (
+          <div style={{ padding: '0 20px 14px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, color: '#6b7280' }}>常用區間：</span>
+            <button onClick={() => {
+              const today = new Date()
+              const pad = (n: number) => String(n).padStart(2, '0')
+              const y = today.getFullYear(), m = today.getMonth() + 1
+              setYear(y); setMonth(m)
+              setDateFrom(`${y}-${pad(m)}-01`)
+              setDateTo(`${y}-${pad(m)}-${pad(today.getDate())}`)
+            }} style={{ padding: '3px 10px', borderRadius: 14, border: '1px solid #e5e7eb', background: '#fff', fontSize: 11, cursor: 'pointer', color: '#374151' }}>本月至今</button>
+            <button onClick={() => {
+              const today = new Date()
+              const pad = (n: number) => String(n).padStart(2, '0')
+              const y = today.getFullYear(), m = today.getMonth() + 1
+              const dow = today.getDay()
+              const lastSun = new Date(today); lastSun.setDate(today.getDate() - (dow === 0 ? 7 : dow))
+              const sunInThisMonth = lastSun.getMonth() + 1 === m && lastSun.getFullYear() === y
+              setYear(y); setMonth(m)
+              setDateFrom(`${y}-${pad(m)}-01`)
+              setDateTo(sunInThisMonth ? `${y}-${pad(m)}-${pad(lastSun.getDate())}` : `${y}-${pad(m)}-01`)
+            }} style={{ padding: '3px 10px', borderRadius: 14, border: '1px solid #e5e7eb', background: '#fff', fontSize: 11, cursor: 'pointer', color: '#374151' }}>月初至上週日</button>
+            <button onClick={() => {
+              const today = new Date()
+              const pad = (n: number) => String(n).padStart(2, '0')
+              const y = today.getFullYear(), m = today.getMonth() + 1
+              const dow = today.getDay()
+              // 上週一到上週日
+              const lastSun = new Date(today); lastSun.setDate(today.getDate() - (dow === 0 ? 7 : dow))
+              const lastMon = new Date(lastSun); lastMon.setDate(lastSun.getDate() - 6)
+              setYear(lastSun.getFullYear()); setMonth(lastSun.getMonth() + 1)
+              setDateFrom(`${lastMon.getFullYear()}-${pad(lastMon.getMonth() + 1)}-${pad(lastMon.getDate())}`)
+              setDateTo(`${lastSun.getFullYear()}-${pad(lastSun.getMonth() + 1)}-${pad(lastSun.getDate())}`)
+            }} style={{ padding: '3px 10px', borderRadius: 14, border: '1px solid #e5e7eb', background: '#fff', fontSize: 11, cursor: 'pointer', color: '#374151' }}>上週</button>
+          </div>
+        )}
         {compErr && <div style={{ padding: '0 20px 14px', fontSize: 12, color: '#dc2626' }}>{compErr}</div>}
       </div>
 
@@ -607,25 +626,37 @@ export default function HRPage() {
               { label: '外籍員工費率', val: 0, n: adj.foreigners.length, source: '調整表 → 外籍員工 sheet', noMoney: true },
               { label: '新進/離職比例計薪', val: 0, n: proratedCount, source: '調整表 → 新進與離職 sheet', noMoney: true },
             ]
+            const totalApplied = items.reduce((s, it) => s + it.n, 0)
             return (
-              <div style={{ background: '#fef9c3', border: '1px solid #fde047', borderRadius: 12, padding: '14px 18px', marginBottom: 16 }}>
-                <div style={{ fontWeight: 600, color: '#713f12', fontSize: 13, marginBottom: 10 }}>📋 本月套用的調整（用來確認調整表有讀進來）</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8, fontSize: 12 }}>
-                  {items.map(it => (
-                    <div key={it.label} style={{ background: '#fff', borderRadius: 8, padding: '10px 12px', border: '1px solid #fde047' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                        <span style={{ fontWeight: 600, color: '#713f12' }}>{it.label}</span>
-                        <span style={{ color: it.n > 0 ? '#16a34a' : '#9ca3af', fontWeight: 600 }}>
-                          {it.n > 0 ? '✓' : '–'} {it.n} 人
-                        </span>
-                      </div>
-                      {!it.noMoney && it.n > 0 && (
-                        <div style={{ fontSize: 14, fontWeight: 700, color: '#1a2f4e', marginTop: 4 }}>{fT(it.val)}</div>
-                      )}
-                      <div style={{ fontSize: 10, color: '#a16207', marginTop: 4 }}>{it.source}</div>
-                    </div>
-                  ))}
+              <div style={{ background: '#fef9c3', border: '1px solid #fde047', borderRadius: 12, marginBottom: 16 }}>
+                <div onClick={() => setAdjSummaryOpen(o => !o)}
+                  style={{ padding: '12px 18px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, userSelect: 'none' }}>
+                  <span style={{ fontSize: 12, color: '#713f12', transition: 'transform .2s', transform: adjSummaryOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+                  <span style={{ fontWeight: 600, color: '#713f12', fontSize: 13 }}>📋 本月套用的調整</span>
+                  <span style={{ fontSize: 11, color: '#a16207', marginLeft: 'auto' }}>
+                    共 {totalApplied} 筆 · {items.filter(it => it.n > 0).map(it => it.label).join(' / ') || '無'}
+                  </span>
                 </div>
+                {adjSummaryOpen && (
+                  <div style={{ padding: '0 18px 14px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8, fontSize: 12 }}>
+                      {items.map(it => (
+                        <div key={it.label} style={{ background: '#fff', borderRadius: 8, padding: '10px 12px', border: '1px solid #fde047' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <span style={{ fontWeight: 600, color: '#713f12' }}>{it.label}</span>
+                            <span style={{ color: it.n > 0 ? '#16a34a' : '#9ca3af', fontWeight: 600 }}>
+                              {it.n > 0 ? '✓' : '–'} {it.n} 人
+                            </span>
+                          </div>
+                          {!it.noMoney && it.n > 0 && (
+                            <div style={{ fontSize: 14, fontWeight: 700, color: '#1a2f4e', marginTop: 4 }}>{fT(it.val)}</div>
+                          )}
+                          <div style={{ fontSize: 10, color: '#a16207', marginTop: 4 }}>{it.source}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )
           })()}
@@ -710,12 +741,17 @@ export default function HRPage() {
                   <tbody>
                     {results.map(e => {
                       const isFT = e.type === '月薪正職'
-                      // 加班費：整月結算 = 實際；週報模式 = 預估月底（線性外推）
-                      const otActual = isFT ? (isWeek ? (e.weekOtPay || 0) : (e.otPay || 0)) : 0
+                      // 加班費：FT 用 weekOtPay/otPay；PT 用 ptDailyOt（每日超過 8H 的加班費總和）
+                      // 整月結算 = 實際；週報模式 = 預估月底（線性外推）
+                      const otActual = isFT
+                        ? (isWeek ? (e.weekOtPay || 0) : (e.otPay || 0))
+                        : (e.ptDailyOt || 0)
                       const otShown = isWeek ? projectMonthEnd(otActual) : otActual
                       const ins = e.propIns || 0
-                      // 基本工資：FT=propSal（period prorated）；PT=propSal-extras（剝離加扣項，純 base+dot+bonus）
-                      const baseSal = isFT ? (e.propSal || 0) : Math.max(0, (e.propSal || 0) - (e.extra || 0))
+                      // 基本工資：FT=propSal；PT=propSal - extras - ptDailyOt（剝離加扣與加班費，純 base+資深加給+門檻獎金）
+                      const baseSal = isFT
+                        ? (e.propSal || 0)
+                        : Math.max(0, (e.propSal || 0) - (e.extra || 0) - (e.ptDailyOt || 0))
                       // 加扣項：週報模式只顯示生日禮金，其他項都歸 0；整月結算才完整顯示
                       const filteredExtraDetail = isWeek
                         ? (e.extraDetail || []).filter(d => d.desc === '生日禮金')
