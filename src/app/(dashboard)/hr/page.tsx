@@ -248,6 +248,30 @@ export default function HRPage() {
       : (e.propSal || 0) + (e.propIns || 0))
   }, 0)
 
+  // 週報視角：基於目前期間 pf 線性外推月底估值
+  const monthDays = new Date(year, month, 0).getDate()
+  const pfActual = (() => {
+    if (!isWeek || !dateFrom || !dateTo) return 1
+    const days = Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000) + 1
+    return Math.max(0.01, Math.min(1, days / monthDays))
+  })()
+  const projectMonthEnd = (val: number) => pfActual > 0 && pfActual < 1 ? val / pfActual : val
+  const projTotalCost = isWeek
+    ? results.reduce((s, e) => {
+        if (e.type === '月薪正職') {
+          // 月薪：固定薪是月底固定值；OT 線性外推；保費已是月固定
+          return s + e.fixedSalary + projectMonthEnd(e.weekOtPay || 0) + (e.propIns || 0)
+        } else {
+          // 工讀：base+ot 都是時薪×時數，線性外推
+          return s + projectMonthEnd(e.propSal || 0) + (e.propIns || 0)
+        }
+      }, 0)
+    : totalCost
+  const projOtCost = isWeek
+    ? results.reduce((s, e) => s + (e.type === '月薪正職' ? projectMonthEnd(e.weekOtPay || 0) : 0), 0)
+    : results.reduce((s, e) => s + (e.type === '月薪正職' ? (e.weekOtPay || 0) : 0), 0)
+  const insCost = results.reduce((s, e) => s + (e.propIns || 0), 0)
+
   const deptMap: Record<string, { ft: number; pt: number; totalH: number; cost: number }> = {}
   results.forEach(e => {
     if (!deptMap[e.dept]) deptMap[e.dept] = { ft: 0, pt: 0, totalH: 0, cost: 0 }
@@ -338,8 +362,8 @@ export default function HRPage() {
           <div>
             <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>計算模式</div>
             <div style={{ display: 'flex', gap: 6 }}>
-              <button onClick={() => setViewMode('month')} style={btnStyle(viewMode === 'month')}>整月</button>
-              <button onClick={() => setViewMode('week')} style={btnStyle(viewMode === 'week')}>週期</button>
+              <button onClick={() => setViewMode('month')} style={btnStyle(viewMode === 'month')}>整月結算</button>
+              <button onClick={() => setViewMode('week')} style={btnStyle(viewMode === 'week')}>週報（至今+預估）</button>
             </div>
           </div>
           {viewMode === 'week' && (
@@ -353,6 +377,25 @@ export default function HRPage() {
                 <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>結束日</div>
                 <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
                   style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 12 }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>常用區間</div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => {
+                    const today = new Date()
+                    const pad = (n: number) => String(n).padStart(2, '0')
+                    setDateFrom(`${year}-${pad(month)}-01`)
+                    setDateTo(`${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`)
+                  }} style={btnStyle(false)}>本月至今</button>
+                  <button onClick={() => {
+                    const today = new Date()
+                    const pad = (n: number) => String(n).padStart(2, '0')
+                    const dow = today.getDay() // 0=Sun
+                    const lastSun = new Date(today); lastSun.setDate(today.getDate() - (dow === 0 ? 7 : dow))
+                    setDateFrom(`${year}-${pad(month)}-01`)
+                    setDateTo(`${lastSun.getFullYear()}-${pad(lastSun.getMonth() + 1)}-${pad(lastSun.getDate())}`)
+                  }} style={btnStyle(false)}>月初至上週日</button>
+                </div>
               </div>
             </>
           )}
@@ -536,13 +579,43 @@ export default function HRPage() {
             )
           })()}
 
+          {/* 週報模式專屬：至今 vs 預估月底對照卡 */}
+          {isWeek && (
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '16px 20px', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
+                <span style={{ fontWeight: 700, color: '#1a2f4e', fontSize: 14 }}>📊 週報視角 ・ 月初至今</span>
+                <span style={{ fontSize: 11, color: '#9ca3af' }}>已過 {(pfActual * 100).toFixed(0)}% 月份（{Math.round(pfActual * monthDays)}/{monthDays} 天）</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+                {[
+                  { label: '至今人事成本', cur: totalCost, proj: projTotalCost, color: '#3c2929' },
+                  { label: '加班費', cur: results.reduce((s, e) => s + (e.type === '月薪正職' ? (e.weekOtPay || 0) : 0), 0), proj: projOtCost, color: '#f59e0b', subText: '月底預估' },
+                  { label: '保費（月固定）', cur: insCost, proj: insCost, color: '#10b981', noProj: true },
+                ].map(it => (
+                  <div key={it.label} style={{ background: '#fafaf8', borderRadius: 10, padding: '12px 14px', borderLeft: `3px solid ${it.color}` }}>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>{it.label}</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: '#1a2f4e' }}>{fT(it.cur)}</div>
+                    {!it.noProj && (
+                      <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                        預估月底 <span style={{ color: it.color, fontWeight: 600 }}>{fT(it.proj)}</span>
+                      </div>
+                    )}
+                    {it.noProj && (
+                      <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>不依週期比例縮減</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* KPI */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
             {[
               { label: '正職人數', val: `${ftCount} 人`, est: false },
               { label: '工讀人數', val: `${ptCount} 人`, est: false },
-              { label: '總出勤時數', val: fH(totalH), est: false },
-              { label: isWeek ? '期間人事成本（估）' : '月人事成本', val: fT(totalCost), est: isWeek },
+              { label: isWeek ? '至今出勤時數' : '總出勤時數', val: fH(totalH), est: false },
+              { label: isWeek ? '預估月底人事成本' : '月人事成本', val: fT(isWeek ? projTotalCost : totalCost), est: isWeek },
             ].map(kpi => (
               <div key={kpi.label} style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '14px 18px' }}>
                 <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>{kpi.label}</div>
@@ -573,7 +646,7 @@ export default function HRPage() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead>
                     <tr style={{ background: '#fafaf8' }}>
-                      {['工號','姓名','門市','類型','出勤H','標準H','加班H', isWeek ? '估薪資' : '薪資','加扣項','保費','合計','職區'].map(h => (
+                      {['工號','姓名','門市','類型','時薪','出勤H','標準H','加班H', isWeek ? '估薪資' : '薪資','加扣項','保費','合計','職區'].map(h => (
                         <th key={h} style={{ padding: '9px 12px', textAlign: ['工號','姓名','門市','職區'].includes(h) ? 'left' : 'right', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1', whiteSpace: 'nowrap' }}>{h}</th>
                       ))}
                     </tr>
@@ -594,6 +667,9 @@ export default function HRPage() {
                             <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 20, background: isFT ? '#e0f2fe' : '#fef9c3', color: isFT ? '#0369a1' : '#854d0e' }}>
                               {isFT ? '正職' : '工讀'}
                             </span>
+                          </td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', color: '#6b7280' }}>
+                            {isFT ? fT(e.hr) : (e.hourlyRate > 0 ? `$${e.hourlyRate}` : '–')}
                           </td>
                           <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fH(e.totalH)}</td>
                           <td style={{ padding: '8px 12px', textAlign: 'right' }}>{isFT ? fH(isWeek ? e.weekStd : e.eStd) : '–'}</td>

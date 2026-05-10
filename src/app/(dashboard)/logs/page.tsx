@@ -33,6 +33,17 @@ function getRange(key: RangeKey) {
 const QUIET = ['無', '無客訴', '無事件分享', '無食材狀況']
 const isQuiet = (s: string) => !s || QUIET.includes(s.trim())
 
+// 簡易 hash（FNV-1a）— 用來判斷 logs 內容是否變動
+function logsHash(s: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(36)
+}
+const aiCacheKey = (from: string, to: string, store: string, session: string) => `ai_${from}_${to}_${store}_${session}`
+
 export default function LogsPage() {
   const initial = getRange('thismonth')
   const [dateFrom, setDateFrom] = useState(initial.from)
@@ -47,6 +58,8 @@ export default function LogsPage() {
   const [aiText, setAiText] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
   const [aiDone, setAiDone] = useState(false)
+  const [aiCachedAt, setAiCachedAt] = useState<number | null>(null)
+  const [forceReanalyze, setForceReanalyze] = useState(false)
 
   const applyRange = (key: RangeKey) => {
     if (key === 'custom') { setActiveRange(key); return }
@@ -55,7 +68,7 @@ export default function LogsPage() {
 
   const fetchData = useCallback(async () => {
     if (!dateFrom || !dateTo) return
-    setLoading(true); setError(''); setAiText(''); setAiDone(false)
+    setLoading(true); setError(''); setAiText(''); setAiDone(false); setAiCachedAt(null)
     try {
       const all = await fetchAllRecords()
       const fields = getFields()
@@ -86,6 +99,24 @@ export default function LogsPage() {
       }
 
       if (logsText.trim()) {
+        const cKey = aiCacheKey(dateFrom, dateTo, storeFilter, sessionFilter)
+        const lh = logsHash(logsText)
+        // 嘗試讀快取（除非按了「重新分析」）
+        if (!forceReanalyze) {
+          try {
+            const cached = localStorage.getItem(cKey)
+            if (cached) {
+              const obj = JSON.parse(cached) as { text: string; logsHash: string; savedAt: number }
+              if (obj.logsHash === lh && obj.text) {
+                setAiText(obj.text)
+                setAiDone(true)
+                setAiCachedAt(obj.savedAt)
+                setLoading(false)
+                return
+              }
+            }
+          } catch { /* ignore */ }
+        }
         setAiLoading(true)
         try {
           const aiRes = await fetch('/api/analyze', {
@@ -94,16 +125,25 @@ export default function LogsPage() {
             body: JSON.stringify({ logs: logsText, dateFrom, dateTo }),
           })
           const aiData = await aiRes.json()
-          setAiText(aiData.error ? `AI 分析失敗：${aiData.error}` : aiData.text || '')
+          if (aiData.error) {
+            setAiText(`AI 分析失敗：${aiData.error}`)
+          } else {
+            const text = aiData.text || ''
+            setAiText(text)
+            try {
+              localStorage.setItem(cKey, JSON.stringify({ text, logsHash: lh, savedAt: Date.now() }))
+            } catch { /* ignore */ }
+          }
           setAiDone(true)
         } catch (e: unknown) {
           setAiText(`AI 分析暫時無法使用：${e instanceof Error ? e.message : ''}`)
           setAiDone(true)
         }
         setAiLoading(false)
+        setForceReanalyze(false)
       }
     } catch (e: unknown) { setError(e instanceof Error ? e.message : '載入失敗'); setLoading(false) }
-  }, [dateFrom, dateTo, sessionFilter])
+  }, [dateFrom, dateTo, sessionFilter, storeFilter, forceReanalyze])
 
   useEffect(() => {
     if (!mounted.current) { mounted.current = true; fetchData() }
@@ -179,12 +219,20 @@ export default function LogsPage() {
           <div style={{ background: 'linear-gradient(135deg, #2d1f1f 0%, #4a2f2f 100%)', borderRadius: 12, padding: '20px 24px', marginBottom: 20, color: '#fff' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
               <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>✦</div>
-              <div>
+              <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 700, fontSize: 15 }}>AI 週報分析</div>
                 <div style={{ fontSize: 12, opacity: 0.7 }}>
-                  {aiDone ? `已完成分析・${dateFrom} ～ ${dateTo}` : aiLoading ? '正在分析本期各分店日誌...' : '載入後自動分析'}
+                  {aiCachedAt
+                    ? `已從快取載入・${dateFrom} ～ ${dateTo}・${new Date(aiCachedAt).toLocaleDateString('zh-TW')} ${new Date(aiCachedAt).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })} 分析`
+                    : aiDone ? `剛完成分析・${dateFrom} ～ ${dateTo}` : aiLoading ? '正在分析本期各分店日誌...' : '載入後自動分析'}
                 </div>
               </div>
+              {aiDone && !aiLoading && (
+                <button onClick={() => { setForceReanalyze(true); fetchData() }}
+                  style={{ padding: '6px 14px', borderRadius: 7, border: '1px solid rgba(255,255,255,0.25)', background: 'rgba(255,255,255,0.1)', color: '#fff', fontSize: 12, cursor: 'pointer' }}>
+                  重新分析
+                </button>
+              )}
             </div>
             {aiLoading && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

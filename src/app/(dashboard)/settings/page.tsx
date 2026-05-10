@@ -76,6 +76,44 @@ export default function SettingsPage() {
     return typeof stdHours[key] === 'number' ? stdHours[key] : 173.33
   }
 
+  // 一次貼上 12 個月：支援逗號、tab、換行、空白分隔
+  const [pasteText, setPasteText] = useState('')
+  const applyPaste = () => {
+    const nums = pasteText.split(/[\s,，\t\n]+/).map(s => s.trim()).filter(Boolean).map(Number).filter(n => !isNaN(n))
+    if (nums.length < 12) {
+      alert(`只解析到 ${nums.length} 個數字，需要 12 個（每月一個）`)
+      return
+    }
+    const next = { ...stdHours }
+    for (let i = 0; i < 12; i++) {
+      next[`${stdYear}-${String(i + 1).padStart(2, '0')}`] = nums[i]
+    }
+    setStdHours(next)
+    setPasteText('')
+  }
+  const clearYear = () => {
+    if (!confirm(`確定要清空 ${stdYear} 年所有月份的標準工時嗎？`)) return
+    const next = { ...stdHours }
+    for (let i = 1; i <= 12; i++) delete next[`${stdYear}-${String(i).padStart(2, '0')}`]
+    setStdHours(next)
+  }
+  const copyFromPrevYear = () => {
+    const next = { ...stdHours }
+    let copied = 0
+    for (let i = 1; i <= 12; i++) {
+      const prev = stdHours[`${stdYear - 1}-${String(i).padStart(2, '0')}`]
+      if (typeof prev === 'number') {
+        next[`${stdYear}-${String(i).padStart(2, '0')}`] = prev
+        copied++
+      }
+    }
+    if (copied === 0) {
+      alert(`${stdYear - 1} 年沒有任何資料可以複製`)
+      return
+    }
+    setStdHours(next)
+  }
+
   const statusDot = connStatus === 'ok' ? '#22c55e' : connStatus === 'checking' ? '#f59e0b' : '#d1d5db'
   const statusText = connStatus === 'ok' ? '連線成功' : connStatus === 'checking' ? '測試中...' : '尚未測試'
 
@@ -171,12 +209,20 @@ export default function SettingsPage() {
 
       {/* 每月標準工時 */}
       <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e8e6e1', marginBottom: 20 }}>
-        <div style={{ padding: '14px 20px', borderBottom: '1px solid #f0eee9', display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid #f0eee9', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 600, color: '#1a2f4e', fontSize: 14 }}>每月標準工時</span>
           <select value={stdYear} onChange={e => setStdYear(+e.target.value)}
             style={{ padding: '4px 8px', borderRadius: 7, border: '1px solid #e5e7eb', fontSize: 12 }}>
-            {[2024, 2025, 2026].map(y => <option key={y} value={y}>{y} 年</option>)}
+            {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y} 年</option>)}
           </select>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+            <button onClick={copyFromPrevYear} style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #e5e7eb', background: '#fff', fontSize: 11, cursor: 'pointer', color: '#374151' }}>
+              從 {stdYear - 1} 年複製
+            </button>
+            <button onClick={clearYear} style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fff', fontSize: 11, cursor: 'pointer', color: '#dc2626' }}>
+              清空本年
+            </button>
+          </div>
         </div>
         <div style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
           {MONTHS.map((label, i) => (
@@ -188,8 +234,20 @@ export default function SettingsPage() {
             </div>
           ))}
         </div>
-        <div style={{ padding: '0 20px 14px', fontSize: 11, color: '#9ca3af' }}>
-          人事成本頁面在選擇年月後，會自動帶入此處設定的標準工時。
+        <div style={{ padding: '0 20px 14px', borderTop: '1px solid #f5f3ee', marginTop: 4 }}>
+          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 12, marginBottom: 6, fontWeight: 600 }}>快速貼上 12 個月（從 Excel/勞動部公告複製）</div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input type="text" value={pasteText} onChange={e => setPasteText(e.target.value)}
+              placeholder="例：176 160 168 160 168 168 184 168 176 176 168 168"
+              style={{ flex: 1, padding: '7px 10px', borderRadius: 7, border: '1px solid #e5e7eb', fontSize: 12 }} />
+            <button onClick={applyPaste} disabled={!pasteText.trim()}
+              style={{ padding: '7px 14px', borderRadius: 7, border: 'none', background: pasteText.trim() ? BRAND : '#d1d5db', color: '#fff', fontSize: 12, fontWeight: 600, cursor: pasteText.trim() ? 'pointer' : 'not-allowed' }}>
+              套用
+            </button>
+          </div>
+          <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 8 }}>
+            數字之間用空白、逗號、tab 或換行分隔皆可。套用後別忘了按下方「儲存設定」。
+          </div>
         </div>
       </div>
 

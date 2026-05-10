@@ -871,17 +871,19 @@ export function calcResults(
     const empPfEntry = empPfMap[e.id]
     const empPf = empPfEntry?.pf
     const finalPf = (empPf !== undefined ? empPf : 1) * pf
+    // 保費獨立用 insPf（不含週期 pf）— 保險是月繳，不該按週期 prorate
+    const insPf = empPf !== undefined ? empPf : 1
 
     // 健保特殊規則（spec 第四條）：
     //   新進：健保全月（不按比例）
     //   離職未滿月：健保 = 0
-    //   離職當月最後一天：全月（finalPf=1）
+    //   離職當月最後一天：全月（insPf=1）
     const isNewHire = empPfEntry?.reason?.startsWith('新進') ?? false
-    const isMidLeave = (empPfEntry?.reason?.startsWith('離職') ?? false) && finalPf < 1
+    const isMidLeave = (empPfEntry?.reason?.startsWith('離職') ?? false) && insPf < 1
     const calcPropIns = (): number => {
-      if (isNewHire) return (ins.total - ins.hb) * finalPf + ins.hb
-      if (isMidLeave) return (ins.total - ins.hb) * finalPf  // 健保歸零
-      return ins.total * finalPf
+      if (isNewHire) return (ins.total - ins.hb) * insPf + ins.hb
+      if (isMidLeave) return (ins.total - ins.hb) * insPf  // 健保歸零
+      return ins.total * insPf
     }
 
     if (e.type === '月薪正職') {
