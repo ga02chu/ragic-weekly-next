@@ -758,6 +758,24 @@ export function birthdayBonusForMonth(year: number, month: number, pay: HREmploy
   return out
 }
 
+// ── 推測這份調整表是哪個月 ──────────────────────────────────────────────────
+// 從本月請假/到離職/國定假日的日期，找出最常出現的 (年, 月)
+export function adjTargetMonth(adj: ParsedAdjustments): { year: number; month: number } | null {
+  const counts: Record<string, number> = {}
+  const bump = (d: Date | null) => {
+    if (!d) return
+    const k = `${d.getFullYear()}-${d.getMonth() + 1}`
+    counts[k] = (counts[k] || 0) + 1
+  }
+  adj.records.forEach(r => bump(r.startDate))
+  adj.holidays.forEach(h => bump(h.date))
+  let maxK = '', maxV = 0
+  for (const k in counts) if (counts[k] > maxV) { maxV = counts[k]; maxK = k }
+  if (!maxK) return null
+  const [y, m] = maxK.split('-').map(Number)
+  return { year: y, month: m }
+}
+
 // ── 外籍員工 id set ────────────────────────────────────────────────────────
 export function foreignerIdsFromNames(foreigners: string[], pay: HREmployee[]): Set<string> {
   const set = new Set<string>()
@@ -896,7 +914,9 @@ export function calcResults(
       const otH = Math.max(0, rawOtH - compH)
       const otPay = (noPunch || isHQ) ? null : ftOT(otH, hr)
       // 本月不足直接扣薪（時數不足扣回，code 1000）— 已含上月不足挪過來的時數
-      const shortageH = (noPunch || isHQ) ? 0 : Math.max(0, eS - totalH)
+      // 週期模式下用 eS × finalPf（即 weekStd）當基準，不然週中會誤判每個人都嚴重不足
+      const shortageRef = eS * finalPf
+      const shortageH = (noPunch || isHQ) ? 0 : Math.max(0, shortageRef - totalH)
       const shortageCut = Math.round(shortageH * hr)
       let extraAmt = att.extras ? (att.extras[e.id] || 0) : 0
       let extraDetail = att.extrasDetail ? [...(att.extrasDetail[e.id] || [])] : null

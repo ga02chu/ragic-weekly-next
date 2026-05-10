@@ -9,7 +9,7 @@ import {
   parsePay, parseAtt, parseLoc, parseAdj, parseBreak, buildBreakMap,
   adjDeltaForMonth, adjExtrasForMonth, empPfForMonth, calcResults, computeStoreDist,
   holidayPayForMonth, compHoursIdMap, latePenaltyForMonth, birthdayBonusForMonth,
-  foreignerIdsFromNames, mergeExtras, emptyAdj,
+  foreignerIdsFromNames, mergeExtras, emptyAdj, adjTargetMonth,
   fT, fH,
   type HREmployee, type AttResult, type LocRecord, type BreakRecord, type CalcResult,
   type ParsedAdjustments,
@@ -171,15 +171,21 @@ export default function HRPage() {
 
       const adjMap = adjDeltaForMonth(year, month, adj.records, pay)
 
+      // 判斷調整表是哪個月，與計算月份不符時不套用月份敏感的加扣項
+      const adjTM = adjTargetMonth(adj)
+      const adjMonthMatches = !adjTM || (adjTM.year === year && adjTM.month === month)
+
       // 把所有來源的 extras 全部 merge 在一起
       const breakMap = buildBreakMap(brk)
-      const lateRes = latePenaltyForMonth(adj.lates, pay)
+      const lateRes = adjMonthMatches ? latePenaltyForMonth(adj.lates, pay) : { extras: { extras: {}, details: {} }, ptZeroIds: new Set<string>() }
       const merged = mergeExtras(
         // 舊：att 的加扣項
         { extras: att.extras || {}, details: att.extrasDetail || {} },
-        // 調整表 其他加扣
-        adjExtrasForMonth(adj.records, pay) as { extras: Record<string, number>; details: Record<string, { code: string; desc: string; amt: number; note: string }[]> },
-        // 國定假日加給
+        // 調整表 其他加扣（月份對才套）
+        adjMonthMatches
+          ? (adjExtrasForMonth(adj.records, pay) as { extras: Record<string, number>; details: Record<string, { code: string; desc: string; amt: number; note: string }[]> })
+          : { extras: {}, details: {} },
+        // 國定假日加給（已用 dateStr 比對，自然不會跨月套用）
         holidayPayForMonth(adj.holidays, pay, att, breakMap),
         // 遲到扣考績（FT）
         lateRes.extras,
@@ -195,7 +201,8 @@ export default function HRPage() {
       const foreignerIds = foreignerIdsFromNames(adj.foreigners, pay)
 
       // 加班換補休：傳 id map 進 calcResults 內，依實際 otH 扣（沒加班費就不扣）
-      const compHIdM = compHoursIdMap(adj.compHours, pay)
+      // 月份不符時不套用
+      const compHIdM = adjMonthMatches ? compHoursIdMap(adj.compHours, pay) : {}
 
       const result = calcResults(
         sDate, eDate, storeFilter, stdH, pf, adjMap, excludeMgmt, locFilter,
@@ -259,11 +266,13 @@ export default function HRPage() {
   const projTotalCost = isWeek
     ? results.reduce((s, e) => {
         if (e.type === '月薪正職') {
-          // 月薪：固定薪是月底固定值；OT 線性外推；保費已是月固定
-          return s + e.fixedSalary + projectMonthEnd(e.weekOtPay || 0) + (e.propIns || 0)
+          // 月薪：固定薪整月固定、加扣項月固定（生日/加給/考績扣）、OT 線性外推、保費月固定
+          return s + e.fixedSalary + (e.extra || 0) + projectMonthEnd(e.weekOtPay || 0) + (e.propIns || 0)
         } else {
-          // 工讀：base+ot 都是時薪×時數，線性外推
-          return s + projectMonthEnd(e.propSal || 0) + (e.propIns || 0)
+          // 工讀：base+ot 都是時薪×時數，線性外推。注意 propSal 已含 extras（生日禮金等月固定）
+          // 為避免月固定項被外推，把 extras 拆出來不外推
+          const variableSal = (e.propSal || 0) - (e.extra || 0)
+          return s + projectMonthEnd(variableSal) + (e.extra || 0) + (e.propIns || 0)
         }
       }, 0)
     : totalCost
@@ -330,6 +339,16 @@ export default function HRPage() {
               {Object.keys(adj.compHours).length > 0 && ` · 換補休 ${Object.keys(adj.compHours).length} 人`}
               {adj.foreigners.length > 0 && ` · 外籍 ${adj.foreigners.length} 人`}
             </span>
+            {(() => {
+              const tm = adjTargetMonth(adj)
+              if (!tm) return null
+              const matches = tm.year === year && tm.month === month
+              return (
+                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: matches ? '#dcfce7' : '#fef3c7', color: matches ? '#166534' : '#92400e' }}>
+                  {matches ? '✓' : '⚠'} 調整表為 {tm.year}/{tm.month} 月{!matches && `（不符當前 ${year}/${month}，月份相關加扣不套用）`}
+                </span>
+              )
+            })()}
             {savedAt && (
               <span style={{ color: '#16a34a', fontSize: 11 }}>
                 ✓ 上次記憶：{new Date(savedAt).toLocaleDateString('zh-TW')} {new Date(savedAt).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })}
@@ -677,7 +696,7 @@ export default function HRPage() {
                               {isFT ? '正職' : '工讀'}
                             </span>
                           </td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right', color: '#6b7280' }}>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', color: isFT ? '#cbd5e1' : '#6b7280', fontStyle: isFT ? 'italic' : 'normal' }}>
                             {isFT ? fT(e.hr) : (e.hourlyRate > 0 ? `$${e.hourlyRate}` : '–')}
                           </td>
                           <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fH(e.totalH)}</td>
