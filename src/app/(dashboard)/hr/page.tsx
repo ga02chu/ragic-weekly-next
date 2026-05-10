@@ -341,7 +341,89 @@ export default function HRPage() {
     <div style={{ padding: 24, maxWidth: 1400 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, color: '#1a2f4e', marginBottom: 16 }}>人事成本</h1>
 
-      {/* 上傳區域 */}
+      {/* 1. 人事成本佔比明細（最上方主視覺） */}
+      {hasResult ? (() => {
+        const salTotal = results.reduce((s, e) => s + (e.propSal || 0), 0)
+        const otTotal = results.reduce((s, e) => s + (e.type === '月薪正職' ? (e.weekOtPay || 0) : 0), 0)
+        const insTotal = results.reduce((s, e) => s + (e.propIns || 0), 0)
+        const holi6002 = results.reduce((s, e) => s + (e.extraDetail?.filter(d => d.code === '6002') || []).reduce((a, b) => a + b.amt, 0), 0)
+        const annual20032 = results.reduce((s, e) => s + (e.extraDetail?.filter(d => d.code === '20032') || []).reduce((a, b) => a + b.amt, 0), 0)
+        const COUNTED_CODES = new Set(['6002', '20032'])
+        const otherExtras = results.reduce((s, e) => s + (e.extraDetail?.filter(d => !COUNTED_CODES.has(d.code)) || []).reduce((a, b) => a + b.amt, 0), 0)
+        const grandTotal = salTotal + otTotal + insTotal + holi6002 + annual20032 + otherExtras
+        const totalRev = chartData.reduce((s, d) => s + d.rev, 0)
+        const pct = (v: number, base: number) => base > 0 ? `${(v / base * 100).toFixed(1)}%` : null
+        const items: { label: string; val: number; icon: string; color: string }[] = [
+          { label: '薪資', val: salTotal, icon: '💼', color: '#3b82f6' },
+          { label: '加班費', val: otTotal, icon: '⏱️', color: '#f59e0b' },
+          { label: '勞健保', val: insTotal, icon: '🏥', color: '#10b981' },
+          { label: '國定假日加給', val: holi6002, icon: '🎉', color: '#8b5cf6' },
+          { label: '特休轉薪資', val: annual20032, icon: '🏖️', color: '#ec4899' },
+          { label: '其他加扣', val: otherExtras, icon: '📋', color: '#64748b' },
+        ]
+        const ratio = totalRev > 0 ? grandTotal / totalRev : 0
+        return (
+          <div style={{ marginBottom: 20 }}>
+            {/* 合計卡片（強調，置頂） */}
+            <div style={{
+              background: `linear-gradient(135deg, ${BRAND} 0%, #5c4040 100%)`,
+              borderRadius: 12, padding: '20px 24px', color: '#fff', marginBottom: 12,
+              display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16,
+            }}>
+              <div>
+                <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>{isWeek ? '期間人事成本（至今）' : '月人事成本合計'}</div>
+                <div style={{ fontSize: 28, fontWeight: 700 }}>{fT(grandTotal)}</div>
+              </div>
+              {totalRev > 0 && (
+                <>
+                  <div style={{ width: 1, height: 40, background: 'rgba(255,255,255,0.2)' }} />
+                  <div>
+                    <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>月營業額</div>
+                    <div style={{ fontSize: 22, fontWeight: 700 }}>{fT(totalRev)}</div>
+                  </div>
+                  <div style={{ width: 1, height: 40, background: 'rgba(255,255,255,0.2)' }} />
+                  <div>
+                    <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>佔月營業額</div>
+                    <div style={{ fontSize: 24, fontWeight: 700, color: ratio > 0.35 ? '#fca5a5' : '#86efac' }}>
+                      {(ratio * 100).toFixed(1)}%
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+            {/* 細項卡片 */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+              {items.map(it => {
+                const pCost = grandTotal > 0 ? (it.val / grandTotal * 100) : 0
+                return (
+                  <div key={it.label} style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '14px 16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: `${it.color}1a`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>{it.icon}</div>
+                      <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>{it.label}</div>
+                    </div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: '#1a2f4e', marginBottom: 8 }}>{fT(it.val)}</div>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>佔人事成本 {pct(it.val, grandTotal) || '–'}</div>
+                    <div style={{ height: 6, background: '#f3f4f6', borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${pCost.toFixed(1)}%`, background: it.color, borderRadius: 3 }} />
+                    </div>
+                    {totalRev > 0 && (
+                      <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 6 }}>佔月營業額 {pct(it.val, totalRev)}</div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })() : (
+        <div style={{ background: '#fafaf8', border: '1px dashed #e5e7eb', borderRadius: 12, padding: '32px 24px', marginBottom: 20, textAlign: 'center', color: '#9ca3af' }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>📊</div>
+          <div style={{ fontSize: 14, color: '#6b7280', marginBottom: 4 }}>人事成本佔比明細</div>
+          <div style={{ fontSize: 12 }}>下方上傳資料 + 計算後，這裡會顯示總覽卡片</div>
+        </div>
+      )}
+
+      {/* 2. 上傳區域 */}
       <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', marginBottom: 16 }}>
         <div style={{ padding: '14px 20px', borderBottom: '1px solid #e8e6e1', fontWeight: 600, color: '#1a2f4e', fontSize: 14 }}>
           Excel 檔案上傳
@@ -389,7 +471,7 @@ export default function HRPage() {
         </div>
       </div>
 
-      {/* 計算設定 */}
+      {/* 3. 計算設定（篩選區間） */}
       <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', marginBottom: 16 }}>
         <div style={{ padding: '14px 20px', borderBottom: '1px solid #e8e6e1', fontWeight: 600, color: '#1a2f4e', fontSize: 14 }}>
           計算設定
@@ -548,95 +630,7 @@ export default function HRPage() {
             )
           })()}
 
-          {/* 人事成本佔比明細 — 卡片版 */}
-          {(() => {
-            const salTotal = results.reduce((s, e) => s + (e.propSal || 0), 0)
-            const otTotal = results.reduce((s, e) => s + (e.type === '月薪正職' ? (e.weekOtPay || 0) : 0), 0)
-            const insTotal = results.reduce((s, e) => s + (e.propIns || 0), 0)
-            // 國定假日加倍：抓代碼 6002（修正以前抓錯成 2000=免稅加班費的問題）
-            const holi6002 = results.reduce((s, e) => {
-              const items = e.extraDetail?.filter(d => d.code === '6002') || []
-              return s + items.reduce((a, b) => a + b.amt, 0)
-            }, 0)
-            const annual20032 = results.reduce((s, e) => {
-              const items = e.extraDetail?.filter(d => d.code === '20032') || []
-              return s + items.reduce((a, b) => a + b.amt, 0)
-            }, 0)
-            // 其他加扣（非已分類項目）
-            const COUNTED_CODES = new Set(['6002', '20032'])
-            const otherExtras = results.reduce((s, e) => {
-              const items = e.extraDetail?.filter(d => !COUNTED_CODES.has(d.code)) || []
-              return s + items.reduce((a, b) => a + b.amt, 0)
-            }, 0)
-            const grandTotal = salTotal + otTotal + insTotal + holi6002 + annual20032 + otherExtras
-            const totalRev = chartData.reduce((s, d) => s + d.rev, 0)
-            const pct = (v: number, base: number) => base > 0 ? `${(v / base * 100).toFixed(1)}%` : null
-            const items: { label: string; val: number; icon: string; color: string }[] = [
-              { label: '薪資', val: salTotal, icon: '💼', color: '#3b82f6' },
-              { label: '加班費', val: otTotal, icon: '⏱️', color: '#f59e0b' },
-              { label: '勞健保', val: insTotal, icon: '🏥', color: '#10b981' },
-              { label: '國定假日加給', val: holi6002, icon: '🎉', color: '#8b5cf6' },
-              { label: '特休轉薪資', val: annual20032, icon: '🏖️', color: '#ec4899' },
-              { label: '其他加扣', val: otherExtras, icon: '📋', color: '#64748b' },
-            ]
-            const ratio = totalRev > 0 ? grandTotal / totalRev : 0
-            return (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontWeight: 600, color: '#1a2f4e', fontSize: 14, marginBottom: 10 }}>人事成本佔比明細</div>
-
-                {/* 細項卡片 */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 12 }}>
-                  {items.map(it => {
-                    const pCost = grandTotal > 0 ? (it.val / grandTotal * 100) : 0
-                    return (
-                      <div key={it.label} style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '14px 16px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                          <div style={{ width: 32, height: 32, borderRadius: 8, background: `${it.color}1a`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>{it.icon}</div>
-                          <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>{it.label}</div>
-                        </div>
-                        <div style={{ fontSize: 20, fontWeight: 700, color: '#1a2f4e', marginBottom: 8 }}>{fT(it.val)}</div>
-                        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>佔人事成本 {pct(it.val, grandTotal) || '–'}</div>
-                        <div style={{ height: 6, background: '#f3f4f6', borderRadius: 3, overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${pCost.toFixed(1)}%`, background: it.color, borderRadius: 3 }} />
-                        </div>
-                        {totalRev > 0 && (
-                          <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 6 }}>佔月營業額 {pct(it.val, totalRev)}</div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-
-                {/* 合計卡片（強調） */}
-                <div style={{
-                  background: `linear-gradient(135deg, ${BRAND} 0%, #5c4040 100%)`,
-                  borderRadius: 12, padding: '20px 24px', color: '#fff',
-                  display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16,
-                }}>
-                  <div>
-                    <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>人事成本合計</div>
-                    <div style={{ fontSize: 28, fontWeight: 700 }}>{fT(grandTotal)}</div>
-                  </div>
-                  {totalRev > 0 && (
-                    <>
-                      <div style={{ width: 1, height: 40, background: 'rgba(255,255,255,0.2)' }} />
-                      <div>
-                        <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>月營業額</div>
-                        <div style={{ fontSize: 22, fontWeight: 700 }}>{fT(totalRev)}</div>
-                      </div>
-                      <div style={{ width: 1, height: 40, background: 'rgba(255,255,255,0.2)' }} />
-                      <div>
-                        <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>佔月營業額</div>
-                        <div style={{ fontSize: 24, fontWeight: 700, color: ratio > 0.35 ? '#fca5a5' : '#86efac' }}>
-                          {(ratio * 100).toFixed(1)}%
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            )
-          })()}
+          {/* 佔比明細已搬到頁面最上方 */}
 
           {/* 週報模式專屬：至今 vs 預估月底對照卡 */}
           {isWeek && (
