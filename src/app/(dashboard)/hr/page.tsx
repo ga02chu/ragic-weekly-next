@@ -866,10 +866,11 @@ export default function HRPage() {
                 ) : (
                   <>
                     {/* 卡片版 — 方便秘書複製貼上 */}
-                    <div style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                    <div style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
                       {storeDist.map(s => (
                         <div key={s.cat} style={{ background: '#fafaf8', border: '1px solid #e8e6e1', borderRadius: 10, padding: '14px 16px' }}>
                           <div style={{ fontWeight: 700, color: '#1a2f4e', fontSize: 14, marginBottom: 10 }}>[{s.cat}]</div>
+                          {/* 工讀 / 正職 */}
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '4px 0' }}>
                             <span style={{ color: '#6b7280' }}>工讀時數</span>
                             <span style={{ fontWeight: 600, color: '#854d0e' }}>{s.ptH.toFixed(2)}</span>
@@ -878,6 +879,18 @@ export default function HRPage() {
                             <span style={{ color: '#6b7280' }}>正職時數</span>
                             <span style={{ fontWeight: 600, color: '#0369a1' }}>{s.ftH.toFixed(2)}</span>
                           </div>
+                          {/* 分隔線 + 內場 / 外場 */}
+                          <div style={{ borderTop: '1px dashed #e8e6e1', marginTop: 6, paddingTop: 6 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '4px 0' }}>
+                              <span style={{ color: '#6b7280' }}>內場時數</span>
+                              <span style={{ fontWeight: 600, color: '#7c3aed' }}>{s.innerH.toFixed(2)}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '4px 0' }}>
+                              <span style={{ color: '#6b7280' }}>外場時數</span>
+                              <span style={{ fontWeight: 600, color: '#16a34a' }}>{s.outerH.toFixed(2)}</span>
+                            </div>
+                          </div>
+                          {/* 總時數 */}
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '6px 0 0', borderTop: '1px solid #e8e6e1', marginTop: 4 }}>
                             <span style={{ fontWeight: 600 }}>總時數</span>
                             <span style={{ fontWeight: 700, color: '#1a2f4e' }}>{s.totalH.toFixed(2)}</span>
@@ -890,8 +903,8 @@ export default function HRPage() {
                     <div style={{ padding: '0 20px 16px' }}>
                       <button onClick={() => {
                         const text = storeDist.map(s =>
-                          `[${s.cat}]\n工讀時數： ${s.ptH.toFixed(2)}\n正職時數： ${s.ftH.toFixed(2)}\n總時數： ${s.totalH.toFixed(2)}`
-                        ).join('\n')
+                          `[${s.cat}]\n工讀時數： ${s.ptH.toFixed(2)}\n正職時數： ${s.ftH.toFixed(2)}\n內場時數： ${s.innerH.toFixed(2)}\n外場時數： ${s.outerH.toFixed(2)}\n總時數： ${s.totalH.toFixed(2)}`
+                        ).join('\n\n')
                         navigator.clipboard.writeText(text).then(() => alert('已複製到剪貼簿'))
                       }} style={{ padding: '6px 14px', borderRadius: 7, border: '1px solid #e5e7eb', background: '#fff', fontSize: 12, cursor: 'pointer', color: '#374151' }}>
                         📋 複製文字（給秘書貼）
