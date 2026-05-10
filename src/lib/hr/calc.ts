@@ -1089,13 +1089,22 @@ export function computeStoreDist(results: EmployeeResult[], locR: LocRecord[], b
     brkByEmpDay[k].push(b)
   })
 
+  // 分店分攤的 PT/FT 分類用「職稱」（人事關係）優先於薪資欄位
+  // 例如 朴勝駿 職稱「內場正職人員」但本薪=0、時薪=215，秘書視為正職
+  const isFTByTitle = (emp: EmployeeResult | undefined): boolean => {
+    if (!emp) return false
+    if ((emp.title || '').includes('正職')) return true
+    if ((emp.title || '').includes('兼職')) return false
+    return emp.type === '月薪正職'
+  }
+
   const punchedIds = new Set<string>()
   locR.forEach(p => {
     const h = p.hours || 0; if (h <= 0) return
     punchedIds.add(p.id)
     const emp = results.find(e => e.id === p.id)
     const isInner = emp?.loc === '內場'
-    const isFT = emp?.type === '月薪正職'
+    const isFT = isFTByTitle(emp)
     const addH = (cat: string, eid: string, hrs: number) => {
       catH[cat][eid] = (catH[cat][eid] || 0) + hrs
       const bucket = isFT
@@ -1126,7 +1135,7 @@ export function computeStoreDist(results: EmployeeResult[], locR: LocRecord[], b
   results.forEach(e => {
     if (punchedIds.has(e.id) || e.totalH <= 0) return
     const homeCat = mapLocToStore(e.dept) || '其他'
-    const isFT = e.type === '月薪正職'
+    const isFT = isFTByTitle(e)
     const isInner = e.loc === '內場'
     catH[homeCat][e.id] = (catH[homeCat][e.id] || 0) + 1
     const bucket = isFT
