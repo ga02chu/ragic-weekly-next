@@ -38,6 +38,7 @@ export interface LocRecord {
   dateStr: string; date: Date | null
   inLoc: string; outLoc: string
   hours: number; cross: boolean
+  inMin?: number | null; outMin?: number | null
 }
 
 export interface AdjRecord {
@@ -64,6 +65,8 @@ export const emptyAdj: ParsedAdjustments = {
 
 export interface BreakRecord {
   id: string; name: string; dateStr: string; mins: number
+  startMin?: number | null; endMin?: number | null
+  startLoc?: string; endLoc?: string
 }
 
 export interface Insurance { lb: number; voc: number; rsv: number; pen: number; hb: number; total: number }
@@ -366,7 +369,7 @@ export function parseLoc(wb: XLSX.WorkBook): LocRecord[] {
       const outL = cdl >= 0 ? String(row[cdl] || '').trim() || '未知' : ''
       const cross = !!(outL && outL !== inL && outL !== '未知')
       const { str: dateStr, date } = parseAttDate(row[cd])
-      return { id: String(row[ci]).trim(), name: String(row[cn] || '').trim(), dateStr, date, inLoc: inL, outLoc: outL, hours: hrs, cross }
+      return { id: String(row[ci]).trim(), name: String(row[cn] || '').trim(), dateStr, date, inLoc: inL, outLoc: outL, hours: hrs, cross, inMin: iM, outMin: oM }
     })
 }
 
@@ -561,7 +564,9 @@ export function parseBreak(wb: XLSX.WorkBook): BreakRecord[] {
   if (hi < 0) hi = 0
   const h = (rows[hi] as string[]).map(c => String(c).trim())
   const C = (n: string) => fuzzyCol(h, n)
-  const ci = C('工號'), cn = C('姓名'), cd = C('日期'), cbs = C('休息開始時間'), cbe = C('休息結束時間')
+  const ci = C('工號'), cn = C('姓名'), cd = C('日期')
+  const cbs = C('休息開始時間'), cbe = C('休息結束時間')
+  const cbsl = C('休息開始地點'), cbel = C('休息結束地點')
   return rows.slice(hi + 1)
     .filter(r => String((r as string[])[ci] || '').trim().startsWith('N'))
     .map(r => {
@@ -569,11 +574,13 @@ export function parseBreak(wb: XLSX.WorkBook): BreakRecord[] {
       const id = String(row[ci]).trim()
       const name = String(row[cn] || '').trim()
       const { str: dateStr } = parseAttDate(row[cd])
-      const sMin = parseTimeFrac(row[cbs]) ?? pMin(String(row[cbs] || '').trim()) ?? 0
-      const eMin = parseTimeFrac(row[cbe]) ?? pMin(String(row[cbe] || '').trim()) ?? 0
-      let mins = eMin - sMin
-      if (mins <= 0 && sMin > 0) mins += 1440
-      return { id, name, dateStr, mins: Math.max(0, mins) }
+      const sMin = parseTimeFrac(row[cbs]) ?? pMin(String(row[cbs] || '').trim()) ?? null
+      const eMin = parseTimeFrac(row[cbe]) ?? pMin(String(row[cbe] || '').trim()) ?? null
+      const startLoc = cbsl >= 0 ? String(row[cbsl] || '').trim() : ''
+      const endLoc = cbel >= 0 ? String(row[cbel] || '').trim() : ''
+      let mins = (sMin != null && eMin != null) ? eMin - sMin : 0
+      if (mins <= 0 && sMin != null && sMin > 0 && eMin != null) mins += 1440
+      return { id, name, dateStr, mins: Math.max(0, mins), startMin: sMin, endMin: eMin, startLoc, endLoc }
     })
     .filter(r => r.mins > 0 && r.dateStr)
 }
@@ -998,6 +1005,51 @@ export function calcResults(
 }
 
 // ── renderStoreLoc helper: compute store distribution ─────────────────────
+// ── 依 spec「分店分攤邏輯說明.md」做時間切段歸店 ──────────────────────────
+// 無休息：整個班次歸下班地點
+// 一段休息：上班→休息開始(在 startLoc)、休息結束→下班(在 endLoc)
+// 多段休息：依序切割，每段前一個 endLoc 決定下一段歸屬
+function segmentByBreaks(
+  inMin: number, outMin: number,
+  inLoc: string, outLoc: string,
+  breaks: { startMin: number; endMin: number; startLoc: string; endLoc: string }[]
+): Record<string, number> {
+  // 跨日 outMin < inMin → 加 1440
+  let oM = outMin
+  if (oM <= inMin) oM += 1440
+  const out: Record<string, number> = {}
+  const add = (loc: string, mins: number) => {
+    if (mins <= 0) return
+    const cat = mapLocToStore(loc || '未知')
+    out[cat] = (out[cat] || 0) + mins / 60
+  }
+  // 處理跨日休息
+  const sorted = breaks.map(b => {
+    let bs = b.startMin, be = b.endMin
+    if (bs < inMin) bs += 1440
+    if (be < bs) be += 1440
+    return { startMin: bs, endMin: be, startLoc: b.startLoc || inLoc, endLoc: b.endLoc || outLoc }
+  }).sort((a, b) => a.startMin - b.startMin)
+
+  if (sorted.length === 0) {
+    add(outLoc, oM - inMin)
+    return out
+  }
+  if (sorted.length === 1) {
+    const b = sorted[0]
+    add(b.startLoc, b.startMin - inMin)
+    add(b.endLoc, oM - b.endMin)
+    return out
+  }
+  // 多段
+  add(inLoc, sorted[0].startMin - inMin)
+  for (let i = 0; i < sorted.length - 1; i++) {
+    add(sorted[i].endLoc, sorted[i + 1].startMin - sorted[i].endMin)
+  }
+  add(sorted[sorted.length - 1].endLoc, oM - sorted[sorted.length - 1].endMin)
+  return out
+}
+
 export interface StoreDistRow {
   cat: string
   totalH: number; totalCost: number
@@ -1009,7 +1061,7 @@ export interface StoreDistRow {
   ptInnerH: number; ptOuterH: number
 }
 
-export function computeStoreDist(results: EmployeeResult[], locR: LocRecord[]): StoreDistRow[] {
+export function computeStoreDist(results: EmployeeResult[], locR: LocRecord[], brk: BreakRecord[] = []): StoreDistRow[] {
   const empMap: Record<string, { costPerH: number; periodCost: number; totalH: number }> = {}
   results.forEach(e => {
     const totalH = e.totalH || 0; if (totalH <= 0) return
@@ -1029,6 +1081,14 @@ export function computeStoreDist(results: EmployeeResult[], locR: LocRecord[]): 
     catGrid[c] = { ftInner: 0, ftOuter: 0, ptInner: 0, ptOuter: 0 }
   })
 
+  // 將休息紀錄依 (id, dateStr) 分組
+  const brkByEmpDay: Record<string, BreakRecord[]> = {}
+  brk.forEach(b => {
+    const k = `${b.id}:${b.dateStr}`
+    if (!brkByEmpDay[k]) brkByEmpDay[k] = []
+    brkByEmpDay[k].push(b)
+  })
+
   const punchedIds = new Set<string>()
   locR.forEach(p => {
     const h = p.hours || 0; if (h <= 0) return
@@ -1044,11 +1104,23 @@ export function computeStoreDist(results: EmployeeResult[], locR: LocRecord[]): 
       catGrid[cat][bucket] += hrs
       if (isFT) catFT[cat].add(eid); else catPT[cat].add(eid)
     }
-    if (p.cross) {
-      const c1 = mapLocToStore(p.inLoc), c2 = mapLocToStore(p.outLoc)
-      addH(c1, p.id, h / 2); addH(c2, p.id, h / 2)
+
+    // 依 spec：用休息打卡時間切段歸店
+    const breaks = (brkByEmpDay[`${p.id}:${p.dateStr}`] || [])
+      .filter(b => b.startMin != null && b.endMin != null)
+      .map(b => ({ startMin: b.startMin!, endMin: b.endMin!, startLoc: b.startLoc || '', endLoc: b.endLoc || '' }))
+
+    if (p.inMin != null && p.outMin != null) {
+      // segments 已扣除休息時間（純工作時段），直接加總
+      const segs = segmentByBreaks(p.inMin, p.outMin, p.inLoc, p.outLoc, breaks)
+      const segTotal = Object.values(segs).reduce((s, v) => s + v, 0)
+      if (segTotal > 0) {
+        Object.entries(segs).forEach(([cat, segH]) => addH(cat, p.id, segH))
+      } else {
+        addH(mapLocToStore(p.outLoc || p.inLoc), p.id, h)
+      }
     } else {
-      addH(mapLocToStore(p.inLoc), p.id, h)
+      addH(mapLocToStore(p.outLoc || p.inLoc), p.id, h)
     }
   })
   results.forEach(e => {

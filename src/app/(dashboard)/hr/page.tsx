@@ -237,7 +237,7 @@ export default function HRPage() {
         pay, mergedAtt, loc, {}, breakMap, empPfMap, foreignerIds, lateRes.ptZeroIds, compHIdM,
       )
       setCalcResult(result)
-      const dist = computeStoreDist(result.results, result.locR)
+      const dist = computeStoreDist(result.results, result.locR, brk)
       setStoreDist(dist)
 
       // Fetch Ragic revenue for chart comparison
