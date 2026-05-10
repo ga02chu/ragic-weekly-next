@@ -892,15 +892,18 @@ export function calcResults(
     // 保費獨立用 insPf（不含週期 pf）— 保險是月繳，不該按週期 prorate
     const insPf = empPf !== undefined ? empPf : 1
 
-    // 健保特殊規則（spec 第四條）：
+    // 健保特殊規則（spec 第四條，僅整月結算模式）：
     //   新進：健保全月（不按比例）
     //   離職未滿月：健保 = 0
     //   離職當月最後一天：全月（insPf=1）
     const isNewHire = empPfEntry?.reason?.startsWith('新進') ?? false
     const isMidLeave = (empPfEntry?.reason?.startsWith('離職') ?? false) && insPf < 1
     const calcPropIns = (): number => {
+      // 週期模式（pf<1）：簡單按 finalPf 比例計算，當作「期間累積保費」
+      if (pf < 1) return ins.total * finalPf
+      // 整月模式：套健保特殊規則
       if (isNewHire) return (ins.total - ins.hb) * insPf + ins.hb
-      if (isMidLeave) return (ins.total - ins.hb) * insPf  // 健保歸零
+      if (isMidLeave) return (ins.total - ins.hb) * insPf
       return ins.total * insPf
     }
 

@@ -178,6 +178,10 @@ export default function HRPage() {
       // 把所有來源的 extras 全部 merge 在一起
       const breakMap = buildBreakMap(brk)
       const lateRes = adjMonthMatches ? latePenaltyForMonth(adj.lates, pay) : { extras: { extras: {}, details: {} }, ptZeroIds: new Set<string>() }
+      // 國定假日加給：限制在當前計算月（避免跨月區間誤套到別月的清明等）
+      const holidaysInMonth = adjMonthMatches
+        ? adj.holidays.filter(h => h.date && h.date.getFullYear() === year && h.date.getMonth() + 1 === month)
+        : []
       const merged = mergeExtras(
         // 舊：att 的加扣項
         { extras: att.extras || {}, details: att.extrasDetail || {} },
@@ -185,8 +189,8 @@ export default function HRPage() {
         adjMonthMatches
           ? (adjExtrasForMonth(adj.records, pay) as { extras: Record<string, number>; details: Record<string, { code: string; desc: string; amt: number; note: string }[]> })
           : { extras: {}, details: {} },
-        // 國定假日加給（已用 dateStr 比對，自然不會跨月套用）
-        holidayPayForMonth(adj.holidays, pay, att, breakMap),
+        // 國定假日加給（已過濾到當前月）
+        holidayPayForMonth(holidaysInMonth, pay, att, breakMap),
         // 遲到扣考績（FT）
         lateRes.extras,
         // 生日禮金
@@ -674,18 +678,26 @@ export default function HRPage() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead>
                     <tr style={{ background: '#fafaf8' }}>
-                      {['工號','姓名','門市','類型','時薪','出勤H','標準H','加班H', isWeek ? '估薪資' : '薪資','加扣項','保費','合計','職區'].map(h => (
-                        <th key={h} style={{ padding: '9px 12px', textAlign: ['工號','姓名','門市','職區'].includes(h) ? 'left' : 'right', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1', whiteSpace: 'nowrap' }}>{h}</th>
+                      {['工號','姓名','門市','類型','時薪','工時（實際/應執勤）', '基本工資','加班費','加扣項',
+                        isWeek ? '期間保費' : '保費', isWeek ? '期間成本' : '人事成本'].map(h => (
+                        <th key={h} style={{ padding: '9px 12px', textAlign: ['工號','姓名','門市'].includes(h) ? 'left' : 'right', color: h === '期間保費' || h === '期間成本' ? '#16a34a' : '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1', whiteSpace: 'nowrap' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {results.map(e => {
                       const isFT = e.type === '月薪正職'
-                      const sal = e.propSal || 0
                       const ot = isFT ? (isWeek ? (e.weekOtPay || 0) : (e.otPay || 0)) : 0
                       const ins = e.propIns || 0
-                      const total = sal + ot + ins
+                      // 基本工資：FT=propSal（已 period prorated）；PT=propSal-extras（剝離加扣項，純 base+dot+bonus）
+                      const baseSal = isFT ? (e.propSal || 0) : Math.max(0, (e.propSal || 0) - (e.extra || 0))
+                      const total = baseSal + ot + (e.extra || 0) + ins
+                      // 工時進度：FT 用實際/應執勤
+                      const expectedH = isFT ? (isWeek ? e.weekStd : e.eStd) : 0
+                      const pct = expectedH > 0 ? (e.totalH / expectedH * 100) : 0
+                      const progBg = !isFT ? '' : pct >= 100 ? '#fee2e2' : pct >= 80 ? '#fef3c7' : '#dcfce7'
+                      const progColor = !isFT ? '' : pct >= 100 ? '#991b1b' : pct >= 80 ? '#92400e' : '#166534'
+                      const arrow = pct >= 100 ? '↑' : '↓'
                       return (
                         <tr key={e.id} style={{ borderBottom: '1px solid #f0eee9' }}>
                           <td style={{ padding: '8px 12px', color: '#9ca3af' }}>{e.id}</td>
@@ -699,18 +711,30 @@ export default function HRPage() {
                           <td style={{ padding: '8px 12px', textAlign: 'right', color: isFT ? '#cbd5e1' : '#6b7280', fontStyle: isFT ? 'italic' : 'normal' }}>
                             {isFT ? fT(e.hr) : (e.hourlyRate > 0 ? `$${e.hourlyRate}` : '–')}
                           </td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fH(e.totalH)}</td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>{isFT ? fH(isWeek ? e.weekStd : e.eStd) : '–'}</td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>{isFT ? fH(isWeek ? e.weekOtH : e.otH) : fH(e.ptDailyOt)}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>
+                            {isFT && expectedH > 0 ? (
+                              <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 6, background: progBg, color: progColor, fontWeight: 600 }}>
+                                {fH(e.totalH)} / {fH(expectedH)} {arrow}{pct.toFixed(0)}%
+                              </span>
+                            ) : (
+                              <span>{fH(e.totalH)}</span>
+                            )}
+                          </td>
                           <td style={{ padding: '8px 12px', textAlign: 'right', fontStyle: isWeek ? 'italic' : 'normal' }}>
-                            {e.noPunch ? '–' : `${isWeek ? '~' : ''}${fT(sal + ot)}`}
+                            {e.noPunch ? '–' : `${isWeek ? '~' : ''}${fT(baseSal)}`}
+                          </td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', color: ot > 0 ? '#f59e0b' : '#9ca3af' }}>
+                            {ot > 0 ? `~${fT(ot)}` : '–'}
                           </td>
                           <td style={{ padding: '8px 12px', textAlign: 'right', color: (e.extra || 0) > 0 ? '#16a34a' : (e.extra || 0) < 0 ? '#dc2626' : '#9ca3af' }}>
                             {e.extra ? fT(e.extra) : '–'}
                           </td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right', color: '#6b7280' }}>{fT(ins)}</td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>{e.noPunch ? '–' : fT(total)}</td>
-                          <td style={{ padding: '8px 12px' }}>{e.loc || '–'}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', color: '#16a34a', fontStyle: isWeek ? 'italic' : 'normal' }}>
+                            {isWeek ? '~' : ''}{fT(ins)}
+                          </td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: '#1a2f4e' }}>
+                            {e.noPunch ? '–' : `${isWeek ? '~' : ''}${fT(total)}`}
+                          </td>
                         </tr>
                       )
                     })}
