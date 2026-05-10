@@ -998,10 +998,18 @@ export function calcResults(
 }
 
 // ── renderStoreLoc helper: compute store distribution ─────────────────────
-export function computeStoreDist(
-  results: EmployeeResult[],
-  locR: LocRecord[]
-): { cat: string; totalH: number; totalCost: number; ft: number; pt: number; innerH: number; outerH: number; ftH: number; ptH: number }[] {
+export interface StoreDistRow {
+  cat: string
+  totalH: number; totalCost: number
+  ft: number; pt: number
+  ftH: number; ptH: number
+  innerH: number; outerH: number
+  // 2x2 拆解
+  ftInnerH: number; ftOuterH: number
+  ptInnerH: number; ptOuterH: number
+}
+
+export function computeStoreDist(results: EmployeeResult[], locR: LocRecord[]): StoreDistRow[] {
   const empMap: Record<string, { costPerH: number; periodCost: number; totalH: number }> = {}
   results.forEach(e => {
     const totalH = e.totalH || 0; if (totalH <= 0) return
@@ -1012,14 +1020,13 @@ export function computeStoreDist(
   })
 
   const catH: Record<string, Record<string, number>> = {}
-  const catLocH: Record<string, { inner: number; outer: number }> = {}
   const catFT: Record<string, Set<string>> = {}
   const catPT: Record<string, Set<string>> = {}
-  // 依正職/工讀拆分時數
-  const catTypeH: Record<string, { ft: number; pt: number }> = {}
+  // 2x2 拆解
+  const catGrid: Record<string, { ftInner: number; ftOuter: number; ptInner: number; ptOuter: number }> = {}
   STORE_CATS.forEach(c => {
-    catH[c] = {}; catLocH[c] = { inner: 0, outer: 0 }; catFT[c] = new Set(); catPT[c] = new Set()
-    catTypeH[c] = { ft: 0, pt: 0 }
+    catH[c] = {}; catFT[c] = new Set(); catPT[c] = new Set()
+    catGrid[c] = { ftInner: 0, ftOuter: 0, ptInner: 0, ptOuter: 0 }
   })
 
   const punchedIds = new Set<string>()
@@ -1031,9 +1038,11 @@ export function computeStoreDist(
     const isFT = emp?.type === '月薪正職'
     const addH = (cat: string, eid: string, hrs: number) => {
       catH[cat][eid] = (catH[cat][eid] || 0) + hrs
-      if (isInner) catLocH[cat].inner += hrs; else catLocH[cat].outer += hrs
-      if (isFT) { catFT[cat].add(eid); catTypeH[cat].ft += hrs }
-      else { catPT[cat].add(eid); catTypeH[cat].pt += hrs }
+      const bucket = isFT
+        ? (isInner ? 'ftInner' : 'ftOuter')
+        : (isInner ? 'ptInner' : 'ptOuter')
+      catGrid[cat][bucket] += hrs
+      if (isFT) catFT[cat].add(eid); else catPT[cat].add(eid)
     }
     if (p.cross) {
       const c1 = mapLocToStore(p.inLoc), c2 = mapLocToStore(p.outLoc)
@@ -1045,10 +1054,14 @@ export function computeStoreDist(
   results.forEach(e => {
     if (punchedIds.has(e.id) || e.totalH <= 0) return
     const homeCat = mapLocToStore(e.dept) || '其他'
+    const isFT = e.type === '月薪正職'
+    const isInner = e.loc === '內場'
     catH[homeCat][e.id] = (catH[homeCat][e.id] || 0) + 1
-    if (e.loc === '內場') catLocH[homeCat].inner += 1; else catLocH[homeCat].outer += 1
-    if (e.type === '月薪正職') { catFT[homeCat].add(e.id); catTypeH[homeCat].ft += 1 }
-    else { catPT[homeCat].add(e.id); catTypeH[homeCat].pt += 1 }
+    const bucket = isFT
+      ? (isInner ? 'ftInner' : 'ftOuter')
+      : (isInner ? 'ptInner' : 'ptOuter')
+    catGrid[homeCat][bucket] += 1
+    if (isFT) catFT[homeCat].add(e.id); else catPT[homeCat].add(e.id)
   })
 
   const empLocTotal: Record<string, number> = {}
@@ -1062,11 +1075,16 @@ export function computeStoreDist(
       const c = empMap[eid], empTotH = empLocTotal[eid] || 0
       if (c && empTotH > 0) totalCost += c.periodCost * (h / empTotH)
     })
+    const g = catGrid[cat]
     return {
       cat, totalH, totalCost: Math.round(totalCost),
       ft: catFT[cat].size, pt: catPT[cat].size,
-      ftH: catTypeH[cat].ft, ptH: catTypeH[cat].pt,
-      innerH: catLocH[cat].inner, outerH: catLocH[cat].outer,
+      ftH: g.ftInner + g.ftOuter,
+      ptH: g.ptInner + g.ptOuter,
+      innerH: g.ftInner + g.ptInner,
+      outerH: g.ftOuter + g.ptOuter,
+      ftInnerH: g.ftInner, ftOuterH: g.ftOuter,
+      ptInnerH: g.ptInner, ptOuterH: g.ptOuter,
     }
   }).filter(r => r.totalH > 0)
 }
