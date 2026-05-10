@@ -119,6 +119,8 @@ export default function HRPage() {
   // 區塊摺疊狀態
   const [uploadOpen, setUploadOpen] = useState(true)
   const [adjSummaryOpen, setAdjSummaryOpen] = useState(false)
+  // 常用區間 preset 選中狀態
+  const [activePreset, setActivePreset] = useState<'mtd' | 'lastSun' | 'lastWeek' | null>(null)
   const [fileStatus, setFileStatus] = useState<Record<FileKey, FileStatus>>({ pay: 'idle', att: 'idle', loc: 'idle', adj: 'idle', brk: 'idle' })
   const [parseErr, setParseErr] = useState<Record<FileKey, string>>({ pay: '', att: '', loc: '', adj: '', brk: '' })
   const [savedAt, setSavedAt] = useState<number | null>(null)
@@ -513,12 +515,12 @@ export default function HRPage() {
             <>
               <div>
                 <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>開始日</div>
-                <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setActivePreset(null) }}
                   style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 12 }} />
               </div>
               <div>
                 <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>結束日</div>
-                <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setActivePreset(null) }}
                   style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 12 }} />
               </div>
             </>
@@ -559,42 +561,52 @@ export default function HRPage() {
             {computing ? '計算中...' : '開始計算'}
           </button>
         </div>
-        {viewMode === 'week' && (
-          <div style={{ padding: '0 20px 14px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 11, color: '#6b7280' }}>常用區間：</span>
-            <button onClick={() => {
-              const today = new Date()
-              const pad = (n: number) => String(n).padStart(2, '0')
-              const y = today.getFullYear(), m = today.getMonth() + 1
-              setYear(y); setMonth(m)
-              setDateFrom(`${y}-${pad(m)}-01`)
-              setDateTo(`${y}-${pad(m)}-${pad(today.getDate())}`)
-            }} style={{ padding: '3px 10px', borderRadius: 14, border: '1px solid #e5e7eb', background: '#fff', fontSize: 11, cursor: 'pointer', color: '#374151' }}>本月至今</button>
-            <button onClick={() => {
-              const today = new Date()
-              const pad = (n: number) => String(n).padStart(2, '0')
-              const y = today.getFullYear(), m = today.getMonth() + 1
-              const dow = today.getDay()
-              const lastSun = new Date(today); lastSun.setDate(today.getDate() - (dow === 0 ? 7 : dow))
-              const sunInThisMonth = lastSun.getMonth() + 1 === m && lastSun.getFullYear() === y
-              setYear(y); setMonth(m)
-              setDateFrom(`${y}-${pad(m)}-01`)
-              setDateTo(sunInThisMonth ? `${y}-${pad(m)}-${pad(lastSun.getDate())}` : `${y}-${pad(m)}-01`)
-            }} style={{ padding: '3px 10px', borderRadius: 14, border: '1px solid #e5e7eb', background: '#fff', fontSize: 11, cursor: 'pointer', color: '#374151' }}>月初至上週日</button>
-            <button onClick={() => {
-              const today = new Date()
-              const pad = (n: number) => String(n).padStart(2, '0')
-              const y = today.getFullYear(), m = today.getMonth() + 1
-              const dow = today.getDay()
-              // 上週一到上週日
-              const lastSun = new Date(today); lastSun.setDate(today.getDate() - (dow === 0 ? 7 : dow))
-              const lastMon = new Date(lastSun); lastMon.setDate(lastSun.getDate() - 6)
-              setYear(lastSun.getFullYear()); setMonth(lastSun.getMonth() + 1)
-              setDateFrom(`${lastMon.getFullYear()}-${pad(lastMon.getMonth() + 1)}-${pad(lastMon.getDate())}`)
-              setDateTo(`${lastSun.getFullYear()}-${pad(lastSun.getMonth() + 1)}-${pad(lastSun.getDate())}`)
-            }} style={{ padding: '3px 10px', borderRadius: 14, border: '1px solid #e5e7eb', background: '#fff', fontSize: 11, cursor: 'pointer', color: '#374151' }}>上週</button>
-          </div>
-        )}
+        {viewMode === 'week' && (() => {
+          const chipStyle = (active: boolean): React.CSSProperties => ({
+            padding: '3px 12px', borderRadius: 14,
+            border: `1.5px solid ${active ? BRAND : '#e5e7eb'}`,
+            background: active ? BRAND : '#fff',
+            color: active ? '#fff' : '#374151',
+            fontSize: 11, fontWeight: active ? 600 : 400, cursor: 'pointer',
+          })
+          return (
+            <div style={{ padding: '0 20px 14px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, color: '#6b7280' }}>常用區間：</span>
+              <button onClick={() => {
+                const today = new Date()
+                const pad = (n: number) => String(n).padStart(2, '0')
+                const y = today.getFullYear(), m = today.getMonth() + 1
+                setYear(y); setMonth(m)
+                setDateFrom(`${y}-${pad(m)}-01`)
+                setDateTo(`${y}-${pad(m)}-${pad(today.getDate())}`)
+                setActivePreset('mtd')
+              }} style={chipStyle(activePreset === 'mtd')}>本月至今</button>
+              <button onClick={() => {
+                const today = new Date()
+                const pad = (n: number) => String(n).padStart(2, '0')
+                const y = today.getFullYear(), m = today.getMonth() + 1
+                const dow = today.getDay()
+                const lastSun = new Date(today); lastSun.setDate(today.getDate() - (dow === 0 ? 7 : dow))
+                const sunInThisMonth = lastSun.getMonth() + 1 === m && lastSun.getFullYear() === y
+                setYear(y); setMonth(m)
+                setDateFrom(`${y}-${pad(m)}-01`)
+                setDateTo(sunInThisMonth ? `${y}-${pad(m)}-${pad(lastSun.getDate())}` : `${y}-${pad(m)}-01`)
+                setActivePreset('lastSun')
+              }} style={chipStyle(activePreset === 'lastSun')}>月初至上週日</button>
+              <button onClick={() => {
+                const today = new Date()
+                const pad = (n: number) => String(n).padStart(2, '0')
+                const dow = today.getDay()
+                const lastSun = new Date(today); lastSun.setDate(today.getDate() - (dow === 0 ? 7 : dow))
+                const lastMon = new Date(lastSun); lastMon.setDate(lastSun.getDate() - 6)
+                setYear(lastSun.getFullYear()); setMonth(lastSun.getMonth() + 1)
+                setDateFrom(`${lastMon.getFullYear()}-${pad(lastMon.getMonth() + 1)}-${pad(lastMon.getDate())}`)
+                setDateTo(`${lastSun.getFullYear()}-${pad(lastSun.getMonth() + 1)}-${pad(lastSun.getDate())}`)
+                setActivePreset('lastWeek')
+              }} style={chipStyle(activePreset === 'lastWeek')}>上週</button>
+            </div>
+          )
+        })()}
         {compErr && <div style={{ padding: '0 20px 14px', fontSize: 12, color: '#dc2626' }}>{compErr}</div>}
       </div>
 
@@ -852,36 +864,76 @@ export default function HRPage() {
                     需上傳地點紀錄才能計算分店分攤
                   </div>
                 ) : (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                    <thead>
-                      <tr style={{ background: '#fafaf8' }}>
-                        {['分店','正職','工讀','出勤H','內場H','外場H','分攤成本'].map(h => (
-                          <th key={h} style={{ padding: '9px 12px', textAlign: h === '分店' ? 'left' : 'right', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1' }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
+                  <>
+                    {/* 卡片版 — 方便秘書複製貼上 */}
+                    <div style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
                       {storeDist.map(s => (
-                        <tr key={s.cat} style={{ borderBottom: '1px solid #f0eee9' }}>
-                          <td style={{ padding: '8px 12px', fontWeight: 600 }}>{s.cat}</td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>{s.ft}</td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>{s.pt}</td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fH(s.totalH)}</td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fH(s.innerH)}</td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fH(s.outerH)}</td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>{fT(s.totalCost)}</td>
-                        </tr>
+                        <div key={s.cat} style={{ background: '#fafaf8', border: '1px solid #e8e6e1', borderRadius: 10, padding: '14px 16px' }}>
+                          <div style={{ fontWeight: 700, color: '#1a2f4e', fontSize: 14, marginBottom: 10 }}>[{s.cat}]</div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '4px 0' }}>
+                            <span style={{ color: '#6b7280' }}>工讀時數</span>
+                            <span style={{ fontWeight: 600, color: '#854d0e' }}>{s.ptH.toFixed(2)}</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '4px 0' }}>
+                            <span style={{ color: '#6b7280' }}>正職時數</span>
+                            <span style={{ fontWeight: 600, color: '#0369a1' }}>{s.ftH.toFixed(2)}</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '6px 0 0', borderTop: '1px solid #e8e6e1', marginTop: 4 }}>
+                            <span style={{ fontWeight: 600 }}>總時數</span>
+                            <span style={{ fontWeight: 700, color: '#1a2f4e' }}>{s.totalH.toFixed(2)}</span>
+                          </div>
+                        </div>
                       ))}
-                      <tr style={{ background: '#fafaf8', fontWeight: 700 }}>
-                        <td style={{ padding: '8px 12px' }}>合計</td>
-                        <td colSpan={2} style={{ padding: '8px 12px' }} />
-                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fH(storeDist.reduce((s, d) => s + d.totalH, 0))}</td>
-                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fH(storeDist.reduce((s, d) => s + d.innerH, 0))}</td>
-                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fH(storeDist.reduce((s, d) => s + d.outerH, 0))}</td>
-                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fT(storeDist.reduce((s, d) => s + d.totalCost, 0))}</td>
-                      </tr>
-                    </tbody>
-                  </table>
+                    </div>
+
+                    {/* 一鍵複製文字（秘書貼到別處用） */}
+                    <div style={{ padding: '0 20px 16px' }}>
+                      <button onClick={() => {
+                        const text = storeDist.map(s =>
+                          `[${s.cat}]\n工讀時數： ${s.ptH.toFixed(2)}\n正職時數： ${s.ftH.toFixed(2)}\n總時數： ${s.totalH.toFixed(2)}`
+                        ).join('\n')
+                        navigator.clipboard.writeText(text).then(() => alert('已複製到剪貼簿'))
+                      }} style={{ padding: '6px 14px', borderRadius: 7, border: '1px solid #e5e7eb', background: '#fff', fontSize: 12, cursor: 'pointer', color: '#374151' }}>
+                        📋 複製文字（給秘書貼）
+                      </button>
+                    </div>
+
+                    {/* 詳細表格 */}
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, borderTop: '1px solid #e8e6e1' }}>
+                      <thead>
+                        <tr style={{ background: '#fafaf8' }}>
+                          {['分店','正職人數','工讀人數','正職H','工讀H','總時數H','內場H','外場H','分攤成本'].map(h => (
+                            <th key={h} style={{ padding: '9px 12px', textAlign: h === '分店' ? 'left' : 'right', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {storeDist.map(s => (
+                          <tr key={s.cat} style={{ borderBottom: '1px solid #f0eee9' }}>
+                            <td style={{ padding: '8px 12px', fontWeight: 600 }}>{s.cat}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'right' }}>{s.ft}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'right' }}>{s.pt}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'right', color: '#0369a1' }}>{fH(s.ftH)}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'right', color: '#854d0e' }}>{fH(s.ptH)}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>{fH(s.totalH)}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'right', color: '#9ca3af' }}>{fH(s.innerH)}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'right', color: '#9ca3af' }}>{fH(s.outerH)}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>{fT(s.totalCost)}</td>
+                          </tr>
+                        ))}
+                        <tr style={{ background: '#fafaf8', fontWeight: 700 }}>
+                          <td style={{ padding: '8px 12px' }}>合計</td>
+                          <td colSpan={2} style={{ padding: '8px 12px' }} />
+                          <td style={{ padding: '8px 12px', textAlign: 'right', color: '#0369a1' }}>{fH(storeDist.reduce((s, d) => s + d.ftH, 0))}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', color: '#854d0e' }}>{fH(storeDist.reduce((s, d) => s + d.ptH, 0))}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fH(storeDist.reduce((s, d) => s + d.totalH, 0))}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', color: '#9ca3af' }}>{fH(storeDist.reduce((s, d) => s + d.innerH, 0))}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', color: '#9ca3af' }}>{fH(storeDist.reduce((s, d) => s + d.outerH, 0))}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fT(storeDist.reduce((s, d) => s + d.totalCost, 0))}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </>
                 )
               )}
 

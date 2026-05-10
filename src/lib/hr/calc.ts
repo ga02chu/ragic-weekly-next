@@ -1001,7 +1001,7 @@ export function calcResults(
 export function computeStoreDist(
   results: EmployeeResult[],
   locR: LocRecord[]
-): { cat: string; totalH: number; totalCost: number; ft: number; pt: number; innerH: number; outerH: number }[] {
+): { cat: string; totalH: number; totalCost: number; ft: number; pt: number; innerH: number; outerH: number; ftH: number; ptH: number }[] {
   const empMap: Record<string, { costPerH: number; periodCost: number; totalH: number }> = {}
   results.forEach(e => {
     const totalH = e.totalH || 0; if (totalH <= 0) return
@@ -1015,7 +1015,12 @@ export function computeStoreDist(
   const catLocH: Record<string, { inner: number; outer: number }> = {}
   const catFT: Record<string, Set<string>> = {}
   const catPT: Record<string, Set<string>> = {}
-  STORE_CATS.forEach(c => { catH[c] = {}; catLocH[c] = { inner: 0, outer: 0 }; catFT[c] = new Set(); catPT[c] = new Set() })
+  // 依正職/工讀拆分時數
+  const catTypeH: Record<string, { ft: number; pt: number }> = {}
+  STORE_CATS.forEach(c => {
+    catH[c] = {}; catLocH[c] = { inner: 0, outer: 0 }; catFT[c] = new Set(); catPT[c] = new Set()
+    catTypeH[c] = { ft: 0, pt: 0 }
+  })
 
   const punchedIds = new Set<string>()
   locR.forEach(p => {
@@ -1023,10 +1028,12 @@ export function computeStoreDist(
     punchedIds.add(p.id)
     const emp = results.find(e => e.id === p.id)
     const isInner = emp?.loc === '內場'
+    const isFT = emp?.type === '月薪正職'
     const addH = (cat: string, eid: string, hrs: number) => {
       catH[cat][eid] = (catH[cat][eid] || 0) + hrs
       if (isInner) catLocH[cat].inner += hrs; else catLocH[cat].outer += hrs
-      if (emp?.type === '月薪正職') catFT[cat].add(eid); else catPT[cat].add(eid)
+      if (isFT) { catFT[cat].add(eid); catTypeH[cat].ft += hrs }
+      else { catPT[cat].add(eid); catTypeH[cat].pt += hrs }
     }
     if (p.cross) {
       const c1 = mapLocToStore(p.inLoc), c2 = mapLocToStore(p.outLoc)
@@ -1040,7 +1047,8 @@ export function computeStoreDist(
     const homeCat = mapLocToStore(e.dept) || '其他'
     catH[homeCat][e.id] = (catH[homeCat][e.id] || 0) + 1
     if (e.loc === '內場') catLocH[homeCat].inner += 1; else catLocH[homeCat].outer += 1
-    if (e.type === '月薪正職') catFT[homeCat].add(e.id); else catPT[homeCat].add(e.id)
+    if (e.type === '月薪正職') { catFT[homeCat].add(e.id); catTypeH[homeCat].ft += 1 }
+    else { catPT[homeCat].add(e.id); catTypeH[homeCat].pt += 1 }
   })
 
   const empLocTotal: Record<string, number> = {}
@@ -1057,6 +1065,7 @@ export function computeStoreDist(
     return {
       cat, totalH, totalCost: Math.round(totalCost),
       ft: catFT[cat].size, pt: catPT[cat].size,
+      ftH: catTypeH[cat].ft, ptH: catTypeH[cat].pt,
       innerH: catLocH[cat].inner, outerH: catLocH[cat].outer,
     }
   }).filter(r => r.totalH > 0)
