@@ -917,9 +917,9 @@ export function calcResults(
       const otH = Math.max(0, rawOtH - compH)
       const otPay = (noPunch || isHQ) ? null : ftOT(otH, hr)
       // 本月不足直接扣薪（時數不足扣回，code 1000）— 已含上月不足挪過來的時數
-      // 週期模式下用 eS × finalPf（即 weekStd）當基準，不然週中會誤判每個人都嚴重不足
+      // 只在整月結算 (pf=1) 時扣；週期模式下不扣，避免顯示週進度造成的負加扣項
       const shortageRef = eS * finalPf
-      const shortageH = (noPunch || isHQ) ? 0 : Math.max(0, shortageRef - totalH)
+      const shortageH = (noPunch || isHQ || pf < 1) ? 0 : Math.max(0, shortageRef - totalH)
       const shortageCut = Math.round(shortageH * hr)
       let extraAmt = att.extras ? (att.extras[e.id] || 0) : 0
       let extraDetail = att.extrasDetail ? [...(att.extrasDetail[e.id] || [])] : null

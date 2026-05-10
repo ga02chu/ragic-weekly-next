@@ -692,20 +692,33 @@ export default function HRPage() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead>
                     <tr style={{ background: '#fafaf8' }}>
-                      {['工號','姓名','門市','類型','時薪','工時（實際/應執勤）', '基本工資','加班費','加扣項',
+                      {['工號','姓名','門市','類型','時薪','工時（實際/應執勤）', '基本工資',
+                        isWeek ? '預估加班費' : '加班費', '加扣項',
                         isWeek ? '期間保費' : '保費', isWeek ? '期間成本' : '人事成本'].map(h => (
-                        <th key={h} style={{ padding: '9px 12px', textAlign: ['工號','姓名','門市'].includes(h) ? 'left' : 'right', color: h === '期間保費' || h === '期間成本' ? '#16a34a' : '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1', whiteSpace: 'nowrap' }}>{h}</th>
+                        <th key={h} style={{ padding: '9px 12px', textAlign: ['工號','姓名','門市'].includes(h) ? 'left' : 'right', color: h === '期間保費' || h === '期間成本' ? '#16a34a' : h === '預估加班費' ? '#f59e0b' : '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1', whiteSpace: 'nowrap' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {results.map(e => {
                       const isFT = e.type === '月薪正職'
-                      const ot = isFT ? (isWeek ? (e.weekOtPay || 0) : (e.otPay || 0)) : 0
+                      // 加班費：整月結算 = 實際；週報模式 = 預估月底（線性外推）
+                      const otActual = isFT ? (isWeek ? (e.weekOtPay || 0) : (e.otPay || 0)) : 0
+                      const otShown = isWeek ? projectMonthEnd(otActual) : otActual
                       const ins = e.propIns || 0
-                      // 基本工資：FT=propSal（已 period prorated）；PT=propSal-extras（剝離加扣項，純 base+dot+bonus）
+                      // 基本工資：FT=propSal（period prorated）；PT=propSal-extras（剝離加扣項，純 base+dot+bonus）
                       const baseSal = isFT ? (e.propSal || 0) : Math.max(0, (e.propSal || 0) - (e.extra || 0))
-                      const total = baseSal + ot + (e.extra || 0) + ins
+                      // 加扣項：週報模式只顯示生日禮金，其他項都歸 0；整月結算才完整顯示
+                      const filteredExtraDetail = isWeek
+                        ? (e.extraDetail || []).filter(d => d.desc === '生日禮金')
+                        : (e.extraDetail || [])
+                      const filteredExtraAmt = isWeek
+                        ? filteredExtraDetail.reduce((s, d) => s + d.amt, 0)
+                        : (e.extra || 0)
+                      // 期間成本：週報模式 = 基本工資 + 期間保費（只算這兩項）；整月 = 全部
+                      const total = isWeek
+                        ? baseSal + ins
+                        : baseSal + otActual + (e.extra || 0) + ins
                       // 工時進度：FT 用實際/應執勤
                       const expectedH = isFT ? (isWeek ? e.weekStd : e.eStd) : 0
                       const pct = expectedH > 0 ? (e.totalH / expectedH * 100) : 0
@@ -737,11 +750,11 @@ export default function HRPage() {
                           <td style={{ padding: '8px 12px', textAlign: 'right', fontStyle: isWeek ? 'italic' : 'normal' }}>
                             {e.noPunch ? '–' : `${isWeek ? '~' : ''}${fT(baseSal)}`}
                           </td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right', color: ot > 0 ? '#f59e0b' : '#9ca3af' }}>
-                            {ot > 0 ? `~${fT(ot)}` : '–'}
+                          <td style={{ padding: '8px 12px', textAlign: 'right', color: otShown > 0 ? '#f59e0b' : '#9ca3af', fontStyle: isWeek ? 'italic' : 'normal' }}>
+                            {otShown > 0 ? `${isWeek ? '~' : ''}${fT(otShown)}` : '–'}
                           </td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right', color: (e.extra || 0) > 0 ? '#16a34a' : (e.extra || 0) < 0 ? '#dc2626' : '#9ca3af' }}>
-                            {e.extra ? fT(e.extra) : '–'}
+                          <td style={{ padding: '8px 12px', textAlign: 'right', color: filteredExtraAmt > 0 ? '#16a34a' : filteredExtraAmt < 0 ? '#dc2626' : '#9ca3af' }}>
+                            {filteredExtraAmt ? fT(filteredExtraAmt) : '–'}
                           </td>
                           <td style={{ padding: '8px 12px', textAlign: 'right', color: '#16a34a', fontStyle: isWeek ? 'italic' : 'normal' }}>
                             {isWeek ? '~' : ''}{fT(ins)}
