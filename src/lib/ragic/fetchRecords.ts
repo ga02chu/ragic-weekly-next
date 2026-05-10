@@ -53,10 +53,12 @@ export async function fetchAllRecords(): Promise<Record<string, unknown>[]> {
 }
 
 export function getFields(): Record<string, string> {
+  if (typeof window === 'undefined') return { ...DEFAULT_FIELDS }
   return { ...DEFAULT_FIELDS, ...JSON.parse(localStorage.getItem('ragic_fields') || '{}') }
 }
 
 export function getMonthlyStdH(year: number, month: number): number {
+  if (typeof window === 'undefined') return 173.33
   const saved = JSON.parse(localStorage.getItem('ragic_std_hours') || '{}')
   const key = `${year}-${String(month).padStart(2, '0')}`
   return typeof saved[key] === 'number' ? saved[key] : 173.33
