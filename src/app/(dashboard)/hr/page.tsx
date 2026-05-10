@@ -163,10 +163,15 @@ export default function HRPage() {
       if (viewMode === 'month' || (!dateFrom && !dateTo)) {
         sDate = monthStart; eDate = monthEnd; pf = 1
       } else {
-        sDate = dateFrom ? new Date(dateFrom) : monthStart
-        eDate = dateTo ? new Date(dateTo) : monthEnd
+        let s = dateFrom ? new Date(dateFrom) : monthStart
+        let e = dateTo ? new Date(dateTo) : monthEnd
+        // 裁切到選定月份：避免跨月範圍使 pf 被夾為 1
+        if (s < monthStart) s = monthStart
+        if (e > monthEnd) e = monthEnd
+        sDate = s; eDate = e
+        if (eDate < sDate) { sDate = monthStart; eDate = monthEnd }
         const periodDays = Math.round((eDate.getTime() - sDate.getTime()) / 86400000) + 1
-        pf = Math.min(1, periodDays / totalDays)
+        pf = Math.min(1, Math.max(0.01, periodDays / totalDays))
       }
 
       const adjMap = adjDeltaForMonth(year, month, adj.records, pay)
@@ -263,7 +268,15 @@ export default function HRPage() {
   const monthDays = new Date(year, month, 0).getDate()
   const pfActual = (() => {
     if (!isWeek || !dateFrom || !dateTo) return 1
-    const days = Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000) + 1
+    // 把日期範圍裁切到選定月份（避免跨月時 pf 被誇大）
+    const monthS = new Date(year, month - 1, 1)
+    const monthE = new Date(year, month, 0)
+    const f = new Date(dateFrom)
+    const t = new Date(dateTo)
+    const ef = f > monthS ? f : monthS
+    const et = t < monthE ? t : monthE
+    if (ef > et) return 0.01
+    const days = Math.round((et.getTime() - ef.getTime()) / 86400000) + 1
     return Math.max(0.01, Math.min(1, days / monthDays))
   })()
   const projectMonthEnd = (val: number) => pfActual > 0 && pfActual < 1 ? val / pfActual : val
@@ -614,9 +627,10 @@ export default function HRPage() {
           {/* 週報模式專屬：至今 vs 預估月底對照卡 */}
           {isWeek && (
             <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '16px 20px', marginBottom: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
-                <span style={{ fontWeight: 700, color: '#1a2f4e', fontSize: 14 }}>📊 週報視角 ・ 月初至今</span>
-                <span style={{ fontSize: 11, color: '#9ca3af' }}>已過 {(pfActual * 100).toFixed(0)}% 月份（{Math.round(pfActual * monthDays)}/{monthDays} 天）</span>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 700, color: '#1a2f4e', fontSize: 14 }}>📊 週報視角</span>
+                <span style={{ fontSize: 12, color: '#6b7280' }}>{dateFrom} ～ {dateTo}（{year}/{month} 月）</span>
+                <span style={{ fontSize: 11, color: '#9ca3af' }}>已涵蓋 {(pfActual * 100).toFixed(0)}% 月份（{Math.round(pfActual * monthDays)}/{monthDays} 天）</span>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
                 {[
