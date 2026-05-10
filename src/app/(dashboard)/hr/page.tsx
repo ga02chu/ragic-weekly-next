@@ -379,21 +379,30 @@ export default function HRPage() {
                   style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 12 }} />
               </div>
               <div>
-                <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>常用區間</div>
+                <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>常用區間（自動依今天）</div>
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button onClick={() => {
                     const today = new Date()
                     const pad = (n: number) => String(n).padStart(2, '0')
-                    setDateFrom(`${year}-${pad(month)}-01`)
-                    setDateTo(`${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`)
+                    const y = today.getFullYear(), m = today.getMonth() + 1
+                    // 把上方的年/月也一起切到今天的月，這樣 stdH 等資料才會正確帶入
+                    setYear(y); setMonth(m)
+                    setDateFrom(`${y}-${pad(m)}-01`)
+                    setDateTo(`${y}-${pad(m)}-${pad(today.getDate())}`)
                   }} style={btnStyle(false)}>本月至今</button>
                   <button onClick={() => {
                     const today = new Date()
                     const pad = (n: number) => String(n).padStart(2, '0')
+                    const y = today.getFullYear(), m = today.getMonth() + 1
                     const dow = today.getDay() // 0=Sun
                     const lastSun = new Date(today); lastSun.setDate(today.getDate() - (dow === 0 ? 7 : dow))
-                    setDateFrom(`${year}-${pad(month)}-01`)
-                    setDateTo(`${lastSun.getFullYear()}-${pad(lastSun.getMonth() + 1)}-${pad(lastSun.getDate())}`)
+                    // 上週日若跨到上個月，就只取本月那段
+                    const sunInThisMonth = lastSun.getMonth() + 1 === m && lastSun.getFullYear() === y
+                    setYear(y); setMonth(m)
+                    setDateFrom(`${y}-${pad(m)}-01`)
+                    setDateTo(sunInThisMonth
+                      ? `${y}-${pad(m)}-${pad(lastSun.getDate())}`
+                      : `${y}-${pad(m)}-01`)
                   }} style={btnStyle(false)}>月初至上週日</button>
                 </div>
               </div>
