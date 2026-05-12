@@ -1062,6 +1062,16 @@ export interface StoreDistRow {
 }
 
 export function computeStoreDist(results: EmployeeResult[], locR: LocRecord[], brk: BreakRecord[] = []): StoreDistRow[] {
+  // 過濾掉總部/執行長 — 他們不在店裡工作，分店分攤不該算入
+  const isHQ = (e: { dept: string; titleLoc?: string }) =>
+    e.dept.includes('總部') || e.dept.includes('執行長') || e.titleLoc === '總部'
+  const filteredResults = results.filter(e => !isHQ(e))
+  const hqIds = new Set(results.filter(isHQ).map(e => e.id))
+  const filteredLocR = locR.filter(p => !hqIds.has(p.id))
+
+  results = filteredResults
+  locR = filteredLocR
+
   const empMap: Record<string, { costPerH: number; periodCost: number; totalH: number }> = {}
   results.forEach(e => {
     const totalH = e.totalH || 0; if (totalH <= 0) return
