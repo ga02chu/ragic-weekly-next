@@ -5,7 +5,9 @@ export async function GET(request: NextRequest) {
   const limit = searchParams.get('limit') || '3000'
 
   const apiToken = process.env.RAGIC_TOKEN || searchParams.get('token') || ''
-  const envPaths = (process.env.RAGIC_PATHS || '').split(',').map(s => s.trim()).filter(Boolean)
+  // RAGIC_PATHS（複數，逗號分隔）優先；舊環境用 RAGIC_PATH（單數）也支援
+  const envPathsRaw = process.env.RAGIC_PATHS || process.env.RAGIC_PATH || ''
+  const envPaths = envPathsRaw.split(',').map(s => s.trim()).filter(Boolean)
   const qpPath = searchParams.get('path')
   const paths = envPaths.length ? envPaths : (qpPath ? [qpPath] : [])
 
