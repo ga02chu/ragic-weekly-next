@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+// Vercel function 最長執行 60 秒（hobby plan 上限）
+export const maxDuration = 60
+
 const FIELDS_PURCHASE = {
   date: '進貨日期時間',
   store: '採購分店',
@@ -29,23 +32,28 @@ function toNum(v: unknown): number {
 }
 
 async function fetchRagic(path: string, token: string, limit = 5000) {
-  const url = `https://ap7.ragic.com/${path}?api&limit=${limit}&APIKey=${token}`
-  // 利用 Next 內建 fetch cache，相同 URL 在 5 分鐘內共享回應
-  const res = await fetch(url, { next: { revalidate: 300 } })
-  if (!res.ok) return []
-  const text = await res.text()
+  // subtables=0 → 不回傳商品明細子表，大幅縮小 payload
+  // limit=N → 取最近 N 筆
+  const url = `https://ap7.ragic.com/${path}?api&limit=${limit}&subtables=0&APIKey=${token}`
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 25_000)
   try {
+    const res = await fetch(url, { signal: ctrl.signal, next: { revalidate: 300 } })
+    if (!res.ok) return []
+    const text = await res.text()
     const data = JSON.parse(text) as Record<string, RagicRow>
     return Object.values(data).filter(r => typeof r === 'object' && r !== null && !Array.isArray(r))
   } catch {
     return []
+  } finally {
+    clearTimeout(timer)
   }
 }
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
-  const from = searchParams.get('from') || ''  // YYYY-MM-DD
-  const to = searchParams.get('to') || ''      // YYYY-MM-DD
+  const from = searchParams.get('from') || ''
+  const to = searchParams.get('to') || ''
 
   const token = process.env.RAGIC_TOKEN
   const purchasePath = process.env.RAGIC_PATH_PURCHASES
@@ -61,6 +69,10 @@ export async function GET(request: NextRequest) {
       fetchRagic(inventoryPath, token),
     ])
 
+    if (!purchaseRows.length && !inventoryRows.length) {
+      return NextResponse.json({ error: 'Ragic 端回傳空資料或逾時，請稍後重試' }, { status: 504 })
+    }
+
     const purchases = purchaseRows.map(r => ({
       date: parseDate(r[FIELDS_PURCHASE.date]),
       store: String(r[FIELDS_PURCHASE.store] || ''),
@@ -75,14 +87,13 @@ export async function GET(request: NextRequest) {
       amount: toNum(r[FIELDS_INVENTORY.amount]),
     })).filter(p => p.date && p.vendor)
 
-    // 範圍過濾：from/to 對進貨；盤點全部回傳讓 client 找 latest before/after
     const filtPurchases = (from && to)
       ? purchases.filter(p => p.date >= from && p.date <= to)
       : purchases
 
     const res = NextResponse.json({
       purchases: filtPurchases,
-      inventory, // 全部回傳，讓 client 自己找 期初/期末
+      inventory,
       stores: Array.from(new Set([
         ...purchases.map(p => p.store),
         ...inventory.map(p => p.store),
@@ -91,8 +102,8 @@ export async function GET(request: NextRequest) {
         ...purchases.map(p => p.vendor),
         ...inventory.map(p => p.vendor),
       ].filter(Boolean))).sort(),
+      counts: { purchases: purchases.length, inventory: inventory.length },
     })
-    // 5 分鐘 edge cache + 5 分鐘 SWR
     res.headers.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=300')
     return res
   } catch (err) {
