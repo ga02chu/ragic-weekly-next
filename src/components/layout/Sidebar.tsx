@@ -1,7 +1,6 @@
 'use client'
 
 import { usePathname, useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
 
 const NAV_ITEMS = [
   { href: '/', label: '總覽', icon: '▦' },
@@ -14,13 +13,12 @@ const NAV_ITEMS = [
   { href: '/settings', label: '設定', icon: '⚙️' },
 ]
 
-export default function Sidebar({ userEmail }: { userEmail: string }) {
+export default function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
 
   const handleLogout = async () => {
-    const supabase = createClient()
-    await supabase.auth.signOut()
+    await fetch('/api/logout', { method: 'POST' })
     router.push('/login')
     router.refresh()
   }
@@ -89,9 +87,6 @@ export default function Sidebar({ userEmail }: { userEmail: string }) {
         padding: '12px 8px',
         borderTop: '1px solid rgba(255,255,255,0.1)',
       }}>
-        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', padding: '0 12px', marginBottom: 8 }}>
-          {userEmail}
-        </div>
         <button
           onClick={handleLogout}
           style={{
