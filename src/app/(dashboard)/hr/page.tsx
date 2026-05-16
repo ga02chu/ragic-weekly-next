@@ -7,7 +7,7 @@ import { processRecords } from '@/lib/ragic/processRecords'
 import { fmt } from '@/lib/ragic/utils'
 import {
   parsePay, parseAtt, parseLoc, parseAdj, parseBreak, buildBreakMap,
-  adjDeltaForMonth, adjExtrasForMonth, empPfForMonth, calcResults, computeStoreDist,
+  adjDeltaForMonth, adjExtrasForMonth, empPfForMonth, calcResults, computeStoreDist, computeCrossStoreDetail,
   holidayPayForMonth, compHoursIdMap, latePenaltyForMonth, birthdayBonusForMonth,
   foreignerIdsFromNames, mergeExtras, emptyAdj, adjTargetMonth,
   fT, fH,
@@ -62,7 +62,7 @@ function rehydrateAdj(raw: unknown): ParsedAdjustments {
 
 const BRAND = '#3c2929'
 type ViewMode = 'week' | 'month'
-type ResultTab = 'employees' | 'dept' | 'store' | 'anom'
+type ResultTab = 'employees' | 'dept' | 'store' | 'crossStore' | 'anom'
 type FileKey = 'pay' | 'att' | 'loc' | 'adj' | 'brk'
 type FileStatus = 'idle' | 'loaded' | 'error'
 
@@ -140,6 +140,9 @@ export default function HRPage() {
 
   const [calcResult, setCalcResult] = useState<CalcResult | null>(null)
   const [storeDist, setStoreDist] = useState<ReturnType<typeof computeStoreDist>>([])
+  const [crossStore, setCrossStore] = useState<ReturnType<typeof computeCrossStoreDetail>>([])
+  const [crossOnly, setCrossOnly] = useState(true)
+  const [crossFtOnly, setCrossFtOnly] = useState(true)
   const [computing, setComputing] = useState(false)
   const [compErr, setCompErr] = useState('')
 
@@ -239,6 +242,7 @@ export default function HRPage() {
       setCalcResult(result)
       const dist = computeStoreDist(result.results, result.locR, brk)
       setStoreDist(dist)
+      setCrossStore(computeCrossStoreDetail(result.results, result.locR, brk))
 
       // Fetch Ragic revenue for chart comparison
       try {
@@ -730,6 +734,7 @@ export default function HRPage() {
                 { key: 'employees' as ResultTab, label: `員工明細（${results.length}）` },
                 { key: 'dept' as ResultTab, label: `門市彙整（${depts.length}）` },
                 { key: 'store' as ResultTab, label: `分店分攤（${storeDist.length}）` },
+                { key: 'crossStore' as ResultTab, label: `跨店明細（${crossStore.filter(r => r.storeCount >= 2).length}）` },
                 { key: 'anom' as ResultTab, label: `異常（${calcResult?.anom.length || 0}）` },
               ]).map(t => (
                 <button key={t.key} onClick={() => setResultTab(t.key)} style={tabStyle(resultTab === t.key)}>
@@ -957,6 +962,74 @@ export default function HRPage() {
                     </table>
                   </>
                 )
+              )}
+
+              {resultTab === 'crossStore' && (
+                crossStore.length === 0 ? (
+                  <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>
+                    需上傳地點紀錄才能計算跨店明細
+                  </div>
+                ) : (() => {
+                  const storeCols = ['品牌概念店', '料韓男2號店', '料韓男3號店', '英洙家', '其他']
+                  let rows = crossStore
+                  if (crossOnly) rows = rows.filter(r => r.storeCount >= 2)
+                  if (crossFtOnly) rows = rows.filter(r => r.type === 'FT')
+                  return (
+                    <>
+                      <div style={{ padding: '12px 20px', borderBottom: '1px solid #f0eee9', display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+                        <label style={{ display: 'flex', gap: 6, cursor: 'pointer', alignItems: 'center' }}>
+                          <input type="checkbox" checked={crossOnly} onChange={e => setCrossOnly(e.target.checked)} />
+                          只看跨店者（≥2 店）
+                        </label>
+                        <label style={{ display: 'flex', gap: 6, cursor: 'pointer', alignItems: 'center' }}>
+                          <input type="checkbox" checked={crossFtOnly} onChange={e => setCrossFtOnly(e.target.checked)} />
+                          只看正職
+                        </label>
+                        <span style={{ color: '#6b7280' }}>顯示 {rows.length} 筆</span>
+                      </div>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ background: '#fafaf8' }}>
+                            {(['工號','姓名','職稱','本店(部門)','身份','內/外','總時數', ...storeCols, '跨店數'] as string[]).map(h => (
+                              <th key={h} style={{ padding: '9px 10px', textAlign: h === '姓名' || h === '職稱' || h === '本店(部門)' ? 'left' : 'right', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1', whiteSpace: 'nowrap' }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map(r => (
+                            <tr key={r.id} style={{ borderBottom: '1px solid #f0eee9' }}>
+                              <td style={{ padding: '7px 10px', color: '#9ca3af', textAlign: 'right' }}>{r.id}</td>
+                              <td style={{ padding: '7px 10px', fontWeight: 600 }}>{r.name}</td>
+                              <td style={{ padding: '7px 10px', color: '#374151' }}>{r.title}</td>
+                              <td style={{ padding: '7px 10px', color: '#6b7280' }}>{r.dept}</td>
+                              <td style={{ padding: '7px 10px', textAlign: 'right' }}>
+                                <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 20, background: r.type === 'FT' ? '#dbeafe' : '#fef3c7', color: r.type === 'FT' ? '#2563eb' : '#d97706' }}>
+                                  {r.type === 'FT' ? '正職' : '工讀'}
+                                </span>
+                              </td>
+                              <td style={{ padding: '7px 10px', color: '#6b7280', textAlign: 'right' }}>{r.loc || '—'}</td>
+                              <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 600 }}>{fH(r.totalH)}</td>
+                              {storeCols.map(c => {
+                                const v = r.byStore[c] || 0
+                                const isMain = c === r.mainStore && r.storeCount >= 2
+                                return (
+                                  <td key={c} style={{ padding: '7px 10px', textAlign: 'right', color: v > 0 ? (isMain ? '#0369a1' : '#374151') : '#d1d5db', fontWeight: isMain ? 600 : 400 }}>
+                                    {v > 0 ? fH(v) : '—'}
+                                  </td>
+                                )
+                              })}
+                              <td style={{ padding: '7px 10px', textAlign: 'right' }}>
+                                {r.storeCount >= 2 ? (
+                                  <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 20, background: '#fee2e2', color: '#dc2626', fontWeight: 600 }}>{r.storeCount}</span>
+                                ) : <span style={{ color: '#d1d5db' }}>{r.storeCount}</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </>
+                  )
+                })()
               )}
 
               {resultTab === 'anom' && (

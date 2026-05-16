@@ -1180,6 +1180,102 @@ export function computeStoreDist(results: EmployeeResult[], locR: LocRecord[], b
   }).filter(r => r.totalH > 0)
 }
 
+// ── Cross-store debug：每位員工在期間內被切到哪些店、各幾小時 ─────────────
+export interface CrossStoreEmpRow {
+  id: string
+  name: string
+  title: string       // 職稱
+  dept: string        // 本店（部門）
+  type: 'FT' | 'PT'   // 用「職稱」優先判定（與分店分攤同口徑）
+  loc: '內場' | '外場' | ''
+  totalH: number      // 此期間實際打卡總時數
+  byStore: Record<string, number>  // 各店時數（不含 0）
+  storeCount: number  // 跨幾個店
+  mainStore: string   // 時數最多的店
+  mainStoreH: number
+}
+
+export function computeCrossStoreDetail(
+  results: EmployeeResult[],
+  locR: LocRecord[],
+  brk: BreakRecord[] = []
+): CrossStoreEmpRow[] {
+  // 過濾 HQ（與分店分攤同口徑）
+  const isHQ = (e: { dept: string; titleLoc?: string }) =>
+    e.dept.includes('總部') || e.dept.includes('執行長') || e.titleLoc === '總部'
+  const filteredResults = results.filter(e => !isHQ(e))
+  const hqIds = new Set(results.filter(isHQ).map(e => e.id))
+  const filteredLocR = locR.filter(p => !hqIds.has(p.id))
+
+  const isFTByTitle = (emp: EmployeeResult | undefined): boolean => {
+    if (!emp) return false
+    if ((emp.title || '').includes('正職')) return true
+    if ((emp.title || '').includes('兼職')) return false
+    return emp.type === '月薪正職'
+  }
+
+  // 休息切段資料
+  const brkByEmpDay: Record<string, BreakRecord[]> = {}
+  brk.forEach(b => {
+    const k = `${b.id}:${b.dateStr}`
+    if (!brkByEmpDay[k]) brkByEmpDay[k] = []
+    brkByEmpDay[k].push(b)
+  })
+
+  // 累計每位員工的 byStore
+  const empByStore: Record<string, Record<string, number>> = {}
+  const addH = (eid: string, cat: string, hrs: number) => {
+    if (hrs <= 0) return
+    if (!empByStore[eid]) empByStore[eid] = {}
+    empByStore[eid][cat] = (empByStore[eid][cat] || 0) + hrs
+  }
+
+  filteredLocR.forEach(p => {
+    const h = p.hours || 0; if (h <= 0) return
+    const breaks = (brkByEmpDay[`${p.id}:${p.dateStr}`] || [])
+      .filter(b => b.startMin != null && b.endMin != null)
+      .map(b => ({ startMin: b.startMin!, endMin: b.endMin!, startLoc: b.startLoc || '', endLoc: b.endLoc || '' }))
+
+    if (p.inMin != null && p.outMin != null) {
+      const segs = segmentByBreaks(p.inMin, p.outMin, p.inLoc, p.outLoc, breaks)
+      const segTotal = Object.values(segs).reduce((s, v) => s + v, 0)
+      if (segTotal > 0) {
+        Object.entries(segs).forEach(([cat, segH]) => addH(p.id, cat, segH))
+      } else {
+        addH(p.id, mapLocToStore(p.outLoc || p.inLoc), h)
+      }
+    } else {
+      addH(p.id, mapLocToStore(p.outLoc || p.inLoc), h)
+    }
+  })
+
+  const rows: CrossStoreEmpRow[] = []
+  filteredResults.forEach(e => {
+    const byStore = empByStore[e.id]
+    if (!byStore) return
+    const entries = Object.entries(byStore).filter(([, h]) => h > 0.005)
+    if (entries.length === 0) return
+    entries.sort((a, b) => b[1] - a[1])
+    const totalH = entries.reduce((s, [, h]) => s + h, 0)
+    rows.push({
+      id: e.id,
+      name: e.name,
+      title: e.title || '',
+      dept: e.dept || '',
+      type: isFTByTitle(e) ? 'FT' : 'PT',
+      loc: e.loc === '內場' || e.loc === '外場' ? e.loc : '',
+      totalH,
+      byStore: Object.fromEntries(entries),
+      storeCount: entries.length,
+      mainStore: entries[0][0],
+      mainStoreH: entries[0][1],
+    })
+  })
+  // 跨店者排前；跨店內依時數排
+  rows.sort((a, b) => (b.storeCount - a.storeCount) || (b.totalH - a.totalH))
+  return rows
+}
+
 // ── Format helpers (for display in components) ────────────────────────────
 export const fT = (n: number) => `$${Math.round(n).toLocaleString('zh-TW')}`
 export const fH = (n: number) => `${Number(n).toFixed(2)}H`
