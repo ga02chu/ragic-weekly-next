@@ -74,6 +74,13 @@ export async function fetchAllRecords(): Promise<Record<string, unknown>[]> {
     } catch { /* fall through */ }
   }
 
+  // 空結果不寫快取，避免暫時故障被鎖死 5 分鐘
+  if (all.length === 0) {
+    _memCache = null; _memCacheKey = ''; _memCacheAt = 0
+    try { localStorage.removeItem('ragic_cache') } catch { /* ignore */ }
+    return all
+  }
+
   _memCache = all; _memCacheKey = cacheKey; _memCacheAt = now
   try { localStorage.setItem('ragic_cache', JSON.stringify({ key: cacheKey, at: now, data: all })) } catch { /* ignore */ }
   return all
