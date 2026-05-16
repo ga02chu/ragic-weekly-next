@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { fetchAllRecords, getFields } from '@/lib/ragic/fetchRecords'
 
 const BRAND = '#3c2929'
@@ -74,57 +74,61 @@ export default function FoodCostPage() {
   const [to, setTo] = useState(defaultTo)
   const [storeFilter, setStoreFilter] = useState<string>('__ALL__')
   const [data, setData] = useState<ApiResp | null>(null)
-  const [revenue, setRevenue] = useState(0)
-  const [loading, setLoading] = useState(false)
+  const [salesRecords, setSalesRecords] = useState<Record<string, unknown>[] | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [salesLoading, setSalesLoading] = useState(true)
   const [error, setError] = useState('')
   const [showDaily, setShowDaily] = useState(false)
 
-  const load = useCallback(async () => {
+  // 只在首次掛載抓資料；後續切日期/分店在記憶體裡篩，不再打 API
+  useEffect(() => {
+    let cancelled = false
     setLoading(true); setError('')
-    try {
-      const params = new URLSearchParams({ from, to })
-      const res = await fetch(`/api/food-cost?${params}`)
-      if (!res.ok) {
-        const e = await res.json().catch(() => ({}))
-        throw new Error(e.error || `HTTP ${res.status}`)
-      }
-      const json = (await res.json()) as ApiResp
-      setData(json)
-
-      // 同步抓營業額（用既有 /api/ragic 透過 fetchAllRecords）
-      try {
-        const sales = await fetchAllRecords()
-        const f = getFields()
-        const dateField = f.date || '營業日期'
-        const storeField = f.store || '分店簡稱'
-        const revField = f.revenue || '當日營業額'
-        let total = 0
-        for (const r of sales) {
-          const rawD = String((r as Record<string, unknown>)[dateField] || '')
-          const m = rawD.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/)
-          if (!m) continue
-          const iso = `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`
-          if (iso < from || iso > to) continue
-          if (storeFilter !== '__ALL__') {
-            const s = String((r as Record<string, unknown>)[storeField] || '')
-            if (s !== storeFilter) continue
-          }
-          const n = parseFloat(String((r as Record<string, unknown>)[revField] || '0').replace(/,/g, ''))
-          if (!isNaN(n)) total += n
+    fetch('/api/food-cost')
+      .then(async res => {
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({}))
+          throw new Error(e.error || `HTTP ${res.status}`)
         }
-        setRevenue(total)
-      } catch {
-        setRevenue(0)
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-      setData(null)
-    } finally {
-      setLoading(false)
-    }
-  }, [from, to, storeFilter])
+        return res.json() as Promise<ApiResp>
+      })
+      .then(json => { if (!cancelled) setData(json) })
+      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
+      .finally(() => { if (!cancelled) setLoading(false) })
 
-  useEffect(() => { load() }, [load])
+    // 營業額獨立抓，不卡進貨表渲染
+    setSalesLoading(true)
+    fetchAllRecords()
+      .then(sales => { if (!cancelled) setSalesRecords(sales) })
+      .catch(() => { if (!cancelled) setSalesRecords([]) })
+      .finally(() => { if (!cancelled) setSalesLoading(false) })
+
+    return () => { cancelled = true }
+  }, [])
+
+  // 營業額：客端篩日期+分店
+  const revenue = useMemo(() => {
+    if (!salesRecords) return 0
+    const f = getFields()
+    const dateField = f.date || '營業日期'
+    const storeField = f.store || '分店簡稱'
+    const revField = f.revenue || '當日營業額'
+    let total = 0
+    for (const r of salesRecords) {
+      const rawD = String((r as Record<string, unknown>)[dateField] || '')
+      const m = rawD.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/)
+      if (!m) continue
+      const iso = `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`
+      if (iso < from || iso > to) continue
+      if (storeFilter !== '__ALL__') {
+        const s = String((r as Record<string, unknown>)[storeField] || '')
+        if (s !== storeFilter) continue
+      }
+      const n = parseFloat(String((r as Record<string, unknown>)[revField] || '0').replace(/,/g, ''))
+      if (!isNaN(n)) total += n
+    }
+    return total
+  }, [salesRecords, from, to, storeFilter])
 
   // 按 vendor 加總當週進貨；篩 store
   const tableRows = useMemo(() => {
@@ -240,14 +244,18 @@ export default function FoodCostPage() {
 
       {/* KPI */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
-        <KpiCard label="本週使用量" value={fmtMoney(totals.usage)} sub={fmtDateRange(from, to)} />
-        <KpiCard label="本週營業額" value={fmtMoney(revenue)} sub={storeFilter === '__ALL__' ? '全部分店' : storeFilter} />
+        <KpiCard label="本週使用量" value={fmtMoney(totals.usage)} sub={fmtDateRange(from, to)} color={totals.usage < 0 ? '#dc2626' : undefined} />
+        <KpiCard label="本週營業額" value={salesLoading ? '載入中...' : fmtMoney(revenue)} sub={storeFilter === '__ALL__' ? '全部分店' : storeFilter} />
         <KpiCard
           label="食材成本率"
-          value={revenue > 0 ? `${ratio.toFixed(2)}%` : '—'}
+          value={revenue > 0 && totals.usage > 0 ? `${ratio.toFixed(2)}%` : '—'}
           sub="使用量 / 營業額"
-          highlight={revenue > 0}
-          color={ratio > 35 ? '#dc2626' : ratio > 30 ? '#d97706' : '#16a34a'}
+          highlight={revenue > 0 && totals.usage > 0}
+          color={
+            revenue <= 0 || totals.usage <= 0 ? '#9ca3af' :
+            ratio > 35 ? '#dc2626' :
+            ratio > 30 ? '#d97706' : '#16a34a'
+          }
         />
       </div>
 
@@ -258,7 +266,10 @@ export default function FoodCostPage() {
       )}
 
       {loading && !data ? (
-        <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>載入中...</div>
+        <div style={{ padding: 60, textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>
+          <div style={{ fontSize: 18, marginBottom: 6 }}>📊 載入進貨單 + 盤點表中...</div>
+          <div>首次載入需要從 Ragic 撈取資料（約 5-20 秒），請稍候</div>
+        </div>
       ) : (
         <>
           {/* 主表 */}

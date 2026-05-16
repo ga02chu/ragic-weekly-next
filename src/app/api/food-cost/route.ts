@@ -30,7 +30,8 @@ function toNum(v: unknown): number {
 
 async function fetchRagic(path: string, token: string, limit = 5000) {
   const url = `https://ap7.ragic.com/${path}?api&limit=${limit}&APIKey=${token}`
-  const res = await fetch(url, { cache: 'no-store' })
+  // 利用 Next 內建 fetch cache，相同 URL 在 5 分鐘內共享回應
+  const res = await fetch(url, { next: { revalidate: 300 } })
   if (!res.ok) return []
   const text = await res.text()
   try {
@@ -79,7 +80,7 @@ export async function GET(request: NextRequest) {
       ? purchases.filter(p => p.date >= from && p.date <= to)
       : purchases
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       purchases: filtPurchases,
       inventory, // 全部回傳，讓 client 自己找 期初/期末
       stores: Array.from(new Set([
@@ -91,6 +92,9 @@ export async function GET(request: NextRequest) {
         ...inventory.map(p => p.vendor),
       ].filter(Boolean))).sort(),
     })
+    // 5 分鐘 edge cache + 5 分鐘 SWR
+    res.headers.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=300')
+    return res
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ error: message }, { status: 500 })
