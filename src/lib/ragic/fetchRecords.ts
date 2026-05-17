@@ -20,28 +20,32 @@ function readSettings() {
   }
 }
 
-export async function fetchAllRecords(): Promise<Record<string, unknown>[]> {
+export async function fetchAllRecords(opts?: { force?: boolean }): Promise<Record<string, unknown>[]> {
+  const force = opts?.force === true
   const { token, path, extraPaths } = readSettings()
   const localPaths = [path, ...extraPaths].filter(Boolean)
 
-  // 三種來源：
-  //  (a) localStorage 有 path → 用 client 設定（每個 path 各打一次 server，server 仍會用 env token 覆蓋）
-  //  (b) localStorage 沒設 → 整包丟給 server，server 用 env RAGIC_PATHS 合併（共用設定）
   const cacheKey = localPaths.length ? localPaths.join('|') + token : '__env__'
   const now = Date.now()
 
-  if (_memCache && _memCacheKey === cacheKey && now - _memCacheAt < CACHE_TTL) return _memCache
+  if (!force) {
+    if (_memCache && _memCacheKey === cacheKey && now - _memCacheAt < CACHE_TTL) return _memCache
 
-  try {
-    const lsRaw = localStorage.getItem('ragic_cache')
-    if (lsRaw) {
-      const lsCache = JSON.parse(lsRaw)
-      if (lsCache.key === cacheKey && now - lsCache.at < CACHE_TTL) {
-        _memCache = lsCache.data; _memCacheKey = cacheKey; _memCacheAt = lsCache.at
-        return _memCache!
+    try {
+      const lsRaw = localStorage.getItem('ragic_cache')
+      if (lsRaw) {
+        const lsCache = JSON.parse(lsRaw)
+        if (lsCache.key === cacheKey && now - lsCache.at < CACHE_TTL) {
+          _memCache = lsCache.data; _memCacheKey = cacheKey; _memCacheAt = lsCache.at
+          return _memCache!
+        }
       }
-    }
-  } catch { /* ignore */ }
+    } catch { /* ignore */ }
+  } else {
+    // 強制刷新：清掉本機快取
+    _memCache = null; _memCacheKey = ''; _memCacheAt = 0
+    try { localStorage.removeItem('ragic_cache') } catch { /* ignore */ }
+  }
 
   const all: Record<string, unknown>[] = []
 
@@ -52,21 +56,22 @@ export async function fetchAllRecords(): Promise<Record<string, unknown>[]> {
         )
       : []
 
+  const bust = force ? `&_=${Date.now()}` : ''
+  const init: RequestInit = force ? { cache: 'no-store' } : {}
   if (localPaths.length) {
     for (const p of localPaths) {
       try {
         const params = new URLSearchParams({ limit: '3000', path: p })
         if (token) params.set('token', token)
-        const res = await fetch(`/api/ragic?${params}`)
+        const res = await fetch(`/api/ragic?${params}${bust}`, init)
         if (!res.ok) continue
         const raw = await res.json()
         all.push(...pickRecords(raw))
       } catch { /* skip */ }
     }
   } else {
-    // 共用模式：server 端用 env 設定，自動合併所有 paths
     try {
-      const res = await fetch('/api/ragic?limit=3000')
+      const res = await fetch(`/api/ragic?limit=3000${bust}`, init)
       if (res.ok) {
         const raw = await res.json()
         all.push(...pickRecords(raw))

@@ -110,11 +110,17 @@ export default function FoodCostPage() {
   const [excludeStaffMeal, setExcludeStaffMeal] = useState(true)
   const [onlyActive, setOnlyActive] = useState(true)
 
-  // 只在首次掛載抓資料；後續切日期/分店在記憶體裡篩，不再打 API
-  useEffect(() => {
-    let cancelled = false
+  const [lastSyncAt, setLastSyncAt] = useState<number>(0)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const loadData = (force = false) => {
+    const cancelRef = { cancelled: false }
     setLoading(true); setError('')
-    fetch('/api/food-cost')
+    setSalesLoading(true)
+    if (force) setRefreshing(true)
+
+    const url = force ? `/api/food-cost?_=${Date.now()}` : '/api/food-cost'
+    fetch(url, force ? { cache: 'no-store' } : undefined)
       .then(async res => {
         if (!res.ok) {
           const e = await res.json().catch(() => ({}))
@@ -122,18 +128,22 @@ export default function FoodCostPage() {
         }
         return res.json() as Promise<ApiResp>
       })
-      .then(json => { if (!cancelled) setData(json) })
-      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
-      .finally(() => { if (!cancelled) setLoading(false) })
+      .then(json => { if (!cancelRef.cancelled) setData(json) })
+      .catch(e => { if (!cancelRef.cancelled) setError(e instanceof Error ? e.message : String(e)) })
+      .finally(() => { if (!cancelRef.cancelled) { setLoading(false); if (force) setRefreshing(false) } })
 
-    // 營業額獨立抓，不卡進貨表渲染
-    setSalesLoading(true)
-    fetchAllRecords()
-      .then(sales => { if (!cancelled) setSalesRecords(sales) })
-      .catch(() => { if (!cancelled) setSalesRecords([]) })
-      .finally(() => { if (!cancelled) setSalesLoading(false) })
+    fetchAllRecords({ force })
+      .then(sales => { if (!cancelRef.cancelled) setSalesRecords(sales) })
+      .catch(() => { if (!cancelRef.cancelled) setSalesRecords([]) })
+      .finally(() => { if (!cancelRef.cancelled) { setSalesLoading(false); setLastSyncAt(Date.now()) } })
 
-    return () => { cancelled = true }
+    return cancelRef
+  }
+
+  useEffect(() => {
+    const ref = loadData(false)
+    return () => { ref.cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // 排除廠商清單（不計入食材成本，跨分店共用，存 localStorage）
@@ -325,6 +335,29 @@ export default function FoodCostPage() {
       <h1 style={{ fontSize: 22, fontWeight: 700, color: '#1a2f4e', marginBottom: 4 }}>食材成本</h1>
       <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 18 }}>
         資料來源：Ragic 進貨單 + 盤點表｜<span style={{ fontWeight: 600 }}>本週使用量 = 期初存貨 + 本週進貨 - 期末盤點</span>
+      </div>
+
+      {/* 同步資料按鈕 */}
+      <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button
+          onClick={() => loadData(true)}
+          disabled={refreshing}
+          title="清掉所有快取，立刻從 Ragic 撈最新資料（約 10-30 秒）"
+          style={{
+            padding: '8px 16px', borderRadius: 8, border: `1px solid ${BRAND}`,
+            background: refreshing ? '#9ca3af' : BRAND, color: '#fff',
+            fontSize: 13, fontWeight: 600, cursor: refreshing ? 'wait' : 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+          }}
+        >
+          <span style={{ display: 'inline-block', transition: 'transform 0.3s', transform: refreshing ? 'rotate(360deg)' : 'none' }}>🔄</span>
+          {refreshing ? '同步中…' : '同步 Ragic 最新資料'}
+        </button>
+        {lastSyncAt > 0 && (
+          <span style={{ fontSize: 12, color: '#6b7280' }}>
+            上次同步：{new Date(lastSyncAt).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+          </span>
+        )}
       </div>
 
       {/* 控制列 */}

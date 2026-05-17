@@ -37,13 +37,14 @@ function toNum(v: unknown): number {
   return isNaN(n) ? 0 : n
 }
 
-async function fetchRagic(path: string, token: string, limit = 5000) {
+async function fetchRagic(path: string, token: string, limit = 5000, force = false) {
   const url = `https://ap7.ragic.com/${path}?api&limit=${limit}&subtables=0&APIKey=${token}`
-  // 50 秒 timeout（Vercel function maxDuration=60，三個 API 並行最慢這個也跑得完）
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 50_000)
   try {
-    const res = await fetch(url, { signal: ctrl.signal, next: { revalidate: 300 } })
+    const res = await fetch(url, force
+      ? { signal: ctrl.signal, cache: 'no-store' }
+      : { signal: ctrl.signal, next: { revalidate: 300 } })
     if (!res.ok) return []
     const text = await res.text()
     const data = JSON.parse(text) as Record<string, RagicRow>
@@ -59,6 +60,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const from = searchParams.get('from') || ''
   const to = searchParams.get('to') || ''
+  const force = searchParams.has('_') || searchParams.get('refresh') === '1'
 
   const token = process.env.RAGIC_TOKEN
   const purchasePath = process.env.RAGIC_PATH_PURCHASES
@@ -71,9 +73,9 @@ export async function GET(request: NextRequest) {
 
   try {
     const [purchaseRows, inventoryRows, itemRows] = await Promise.all([
-      fetchRagic(purchasePath, token),
-      fetchRagic(inventoryPath, token),
-      itemsPath ? fetchRagic(itemsPath, token, 8000) : Promise.resolve([] as RagicRow[]),
+      fetchRagic(purchasePath, token, 5000, force),
+      fetchRagic(inventoryPath, token, 5000, force),
+      itemsPath ? fetchRagic(itemsPath, token, 8000, force) : Promise.resolve([] as RagicRow[]),
     ])
 
     if (!purchaseRows.length && !inventoryRows.length) {
@@ -139,7 +141,12 @@ export async function GET(request: NextRequest) {
       counts: { purchases: purchases.length, inventory: inventory.length, items: itemRows.length },
       staffMealTotalAll,
     })
-    res.headers.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=300')
+    // 強制刷新時不要快取；正常情況 CDN 快取 5 分鐘
+    if (force) {
+      res.headers.set('Cache-Control', 'no-store, max-age=0')
+    } else {
+      res.headers.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=300')
+    }
     return res
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
