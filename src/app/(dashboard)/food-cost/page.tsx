@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { fetchAllRecords, getFields } from '@/lib/ragic/fetchRecords'
 
 const BRAND = '#3c2929'
@@ -272,34 +272,11 @@ export default function FoodCostPage() {
         <button onClick={setThisWeek} style={btnStyle('primary')}>本週</button>
         <button onClick={setLastWeek} style={btnStyle()}>上週</button>
         <button onClick={() => shiftWeek(1)} style={btnStyle()}>下一週 →</button>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 8 }}>
-          <input
-            type="date"
-            value={from}
-            onChange={e => {
-              // 自動 snap：選到任何日期都對齊到該週週一-週日
-              const picked = new Date(e.target.value + 'T00:00:00')
-              if (isNaN(picked.getTime())) return
-              const m = mondayOf(picked)
-              setFrom(toISO(m))
-              setTo(toISO(addDays(m, 6)))
-            }}
-            style={dateStyle}
-          />
-          <span style={{ color: '#9ca3af' }}>~</span>
-          <input
-            type="date"
-            value={to}
-            onChange={e => {
-              const picked = new Date(e.target.value + 'T00:00:00')
-              if (isNaN(picked.getTime())) return
-              const m = mondayOf(picked)
-              setFrom(toISO(m))
-              setTo(toISO(addDays(m, 6)))
-            }}
-            style={dateStyle}
-          />
-        </div>
+        <WeekPicker
+          from={from}
+          to={to}
+          onChange={(f, t) => { setFrom(f); setTo(t) }}
+        />
         <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, cursor: 'pointer', color: '#374151' }}>
           <input type="checkbox" checked={excludeStaffMeal} onChange={e => setExcludeStaffMeal(e.target.checked)} />
           排除員工餐專用單
@@ -528,4 +505,126 @@ const selStyle: React.CSSProperties = { padding: '5px 10px', borderRadius: 7, bo
 
 function tdNum(_n: number, color: string, bold = false): React.CSSProperties {
   return { padding: '9px 14px', textAlign: 'right', color, fontWeight: bold ? 600 : 400, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }
+}
+
+// 週一開頭的週選擇器（替代 input[type=date]）
+function WeekPicker({ from, to, onChange }: { from: string; to: string; onChange: (f: string, t: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [view, setView] = useState(() => {
+    const d = new Date(from + 'T00:00:00')
+    return new Date(d.getFullYear(), d.getMonth(), 1)
+  })
+  const popRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onClick = (e: MouseEvent) => {
+      if (popRef.current && !popRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [open])
+
+  const monday = (d: Date) => {
+    const x = new Date(d); x.setHours(0,0,0,0)
+    const day = x.getDay()
+    x.setDate(x.getDate() + (day === 0 ? -6 : 1 - day))
+    return x
+  }
+  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+
+  // 產生月曆 grid（週一開頭）
+  const grid = useMemo(() => {
+    const firstOfMonth = new Date(view.getFullYear(), view.getMonth(), 1)
+    const start = monday(firstOfMonth) // 該月第一天所在週的週一
+    const cells: Date[] = []
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(start); d.setDate(start.getDate() + i)
+      cells.push(d)
+    }
+    return cells
+  }, [view])
+
+  const fromD = new Date(from + 'T00:00:00')
+  const toD = new Date(to + 'T00:00:00')
+  const inSelectedWeek = (d: Date) => d >= fromD && d <= toD
+  const isToday = (d: Date) => {
+    const t = new Date(); t.setHours(0,0,0,0)
+    return d.getTime() === t.getTime()
+  }
+
+  const handlePick = (d: Date) => {
+    const m = monday(d)
+    const sun = new Date(m); sun.setDate(m.getDate() + 6)
+    onChange(iso(m), iso(sun))
+    setOpen(false)
+  }
+
+  return (
+    <div style={{ position: 'relative', marginLeft: 4 }} ref={popRef}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          padding: '6px 12px', borderRadius: 7, border: '1px solid #e5e7eb',
+          background: '#fff', fontSize: 12, cursor: 'pointer', color: '#374151',
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}
+      >
+        📅 <span style={{ fontFamily: 'ui-monospace, monospace' }}>{from} ~ {to}</span>
+      </button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 100,
+          background: '#fff', borderRadius: 10, border: '1px solid #e5e7eb',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.12)', padding: 14, width: 290,
+        }}>
+          {/* 月份切換列 */}
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
+            <button onClick={() => setView(new Date(view.getFullYear(), view.getMonth() - 1, 1))}
+              style={{ border: 'none', background: 'transparent', fontSize: 16, cursor: 'pointer', padding: '4px 8px' }}>‹</button>
+            <span style={{ flex: 1, textAlign: 'center', fontWeight: 700, color: BRAND }}>
+              {view.getFullYear()} 年 {view.getMonth() + 1} 月
+            </span>
+            <button onClick={() => setView(new Date(view.getFullYear(), view.getMonth() + 1, 1))}
+              style={{ border: 'none', background: 'transparent', fontSize: 16, cursor: 'pointer', padding: '4px 8px' }}>›</button>
+          </div>
+
+          {/* 週標題（週一開頭！） */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, marginBottom: 4 }}>
+            {['一','二','三','四','五','六','日'].map(d => (
+              <div key={d} style={{ textAlign: 'center', fontSize: 11, color: '#9ca3af', padding: '4px 0', fontWeight: 600 }}>{d}</div>
+            ))}
+          </div>
+
+          {/* 日期 grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
+            {grid.map((d, i) => {
+              const sameMonth = d.getMonth() === view.getMonth()
+              const sel = inSelectedWeek(d)
+              const today = isToday(d)
+              return (
+                <button key={i} onClick={() => handlePick(d)}
+                  style={{
+                    aspectRatio: '1', border: today ? `1.5px solid ${BRAND}` : '1px solid transparent',
+                    borderRadius: 6, cursor: 'pointer', fontSize: 12,
+                    background: sel ? BRAND : 'transparent',
+                    color: sel ? '#fff' : sameMonth ? '#374151' : '#d1d5db',
+                    fontWeight: sel ? 700 : 400,
+                  }}
+                  onMouseEnter={e => { if (!sel) e.currentTarget.style.background = '#f3f0ea' }}
+                  onMouseLeave={e => { if (!sel) e.currentTarget.style.background = 'transparent' }}
+                >
+                  {d.getDate()}
+                </button>
+              )
+            })}
+          </div>
+
+          <div style={{ marginTop: 10, fontSize: 11, color: '#9ca3af', textAlign: 'center' }}>
+            點任何一天 → 自動選整週（週一-週日）
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
