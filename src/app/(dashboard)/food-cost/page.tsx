@@ -168,9 +168,8 @@ export default function FoodCostPage() {
       ? data.purchases
       : data.purchases.filter(p => p.store === storeFilter)
 
-    const prevDay = addDays(new Date(from + 'T00:00:00'), -1)
-    const prevDayISO = toISO(prevDay)
-    // 期末給 3 天 grace 期：若該廠商 to 當日沒盤點，往後找 1-3 天的盤點（隔週週一才盤的情況）
+    // 期初 = latest 盤點 ≤ from（含週一當天）— 週一早上的盤點實際反映上週末庫存
+    // 期末 = latest 盤點 ≤ to + 3 天 — 若 to 當日沒盤、隔週週一才盤也算
     const toPlus3 = toISO(addDays(new Date(to + 'T00:00:00'), 3))
 
     // 「幽靈廠商」過濾：到參考日為止，距離最近一筆盤點或進貨超過 60 天 → 視為休眠
@@ -184,7 +183,7 @@ export default function FoodCostPage() {
     const rows = vendorsForStore
       .filter(v => recentVendors.has(v))
       .map(vendor => {
-        const begin = latestInventoryBefore(invFiltered, prevDayISO, vendor, storeFilter)
+        const begin = latestInventoryBefore(invFiltered, from, vendor, storeFilter)
         const purchases = inRange.filter(p => p.vendor === vendor).reduce((s, p) => s + p.amount, 0)
         const end = latestInventoryBefore(invFiltered, toPlus3, vendor, storeFilter)
         const usage = begin + purchases - end
