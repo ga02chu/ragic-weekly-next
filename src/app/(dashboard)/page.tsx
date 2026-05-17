@@ -115,6 +115,20 @@ export default function DashboardPage() {
     }).catch(() => { /* ignore */ })
   }, [])
 
+  // 讀 HR 計算 snapshot（/hr 頁計算完會存）
+  type HRSnapshot = {
+    calcAt: number; year: number; month: number; viewMode: string; dateFrom: string; dateTo: string
+    totalCost: number
+    byStore: { cat: string; totalCost: number; ft: number; pt: number; totalH: number }[]
+  }
+  const [hrSnapshot, setHrSnapshot] = useState<HRSnapshot | null>(null)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('hr_last_result')
+      if (raw) setHrSnapshot(JSON.parse(raw))
+    } catch { /* ignore */ }
+  }, [])
+
   const mounted = useRef(false)
 
   const fetchData = useCallback(async (fromOverride?: string, toOverride?: string) => {
@@ -404,21 +418,140 @@ export default function DashboardPage() {
                 </div>
               </a>
 
-              {/* 人事成本入口 */}
-              <a href="/hr" style={{ background: '#fff', borderRadius: 12, padding: '16px 20px', border: '1px solid #e8e6e1', textDecoration: 'none', display: 'block' }}>
+              {/* 人事成本 */}
+              <a href="/hr" style={{
+                background: hrSnapshot && totalRev > 0
+                  ? ((hrSnapshot.totalCost / totalRev * 100) > 35 ? '#fee2e2' : (hrSnapshot.totalCost / totalRev * 100) > 30 ? '#fef3c7' : '#dcfce7')
+                  : '#fff',
+                borderRadius: 12, padding: '16px 20px',
+                border: `1px solid ${hrSnapshot && totalRev > 0 ? ((hrSnapshot.totalCost / totalRev * 100) > 35 ? '#fca5a5' : (hrSnapshot.totalCost / totalRev * 100) > 30 ? '#fbbf24' : '#86efac') : '#e8e6e1'}`,
+                textDecoration: 'none', display: 'block',
+              }}>
                 <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, display: 'flex', justifyContent: 'space-between' }}>
                   <span>人事成本</span>
                   <span style={{ color: BRAND }}>→</span>
                 </div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: '#1a2f4e' }}>
-                  前往 HR 詳細試算
-                </div>
-                <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
-                  需上傳薪資/打卡/地點檔案計算
-                </div>
+                {hrSnapshot ? (
+                  <>
+                    <div style={{ fontSize: 24, fontWeight: 700, color: '#1a2f4e' }}>
+                      ${fmt(hrSnapshot.totalCost)}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                      成本率 {totalRev > 0 ? (hrSnapshot.totalCost / totalRev * 100).toFixed(2) + '%' : '—'}
+                      {' · '}
+                      {hrSnapshot.viewMode === 'week'
+                        ? `期間 ${hrSnapshot.dateFrom} ~ ${hrSnapshot.dateTo}`
+                        : `${hrSnapshot.year}/${hrSnapshot.month}`}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: '#9ca3af' }}>
+                      未計算
+                    </div>
+                    <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                      點此前往 HR 頁面上傳檔案計算
+                    </div>
+                  </>
+                )}
               </a>
             </div>
           </div>
+
+          {/* 分店成本明細 */}
+          {hasData && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#1a2f4e', marginBottom: 8 }}>
+                🏪 分店成本明細
+              </div>
+              <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: '#fafaf8' }}>
+                      {['分店', '營業額', '食材使用', '食材率', '人事成本', '人事率', '合計成本率'].map((h, i) => (
+                        <th key={h} style={{ padding: '10px 14px', textAlign: i === 0 ? 'left' : 'right', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {storeList.map(([key, s]) => {
+                      const sName = s.displayName
+                      // 該分店食材使用量
+                      let foodUsage = 0
+                      if (foodCost) {
+                        const ALWAYS_EXCLUDE = ['樂清']
+                        const isAutoEx = (v: string) => ALWAYS_EXCLUDE.some(k => v.includes(k))
+                        const purIn = foodCost.purchases.filter(p =>
+                          p.store === sName && p.date >= dateFrom && p.date <= dateTo && !p.isStaffOnly && !isAutoEx(p.vendor)
+                        )
+                        const purTotal = purIn.reduce((s, p) => s + p.amount, 0)
+                        const toPlus3 = (() => { const d = new Date(dateTo + 'T00:00:00'); d.setDate(d.getDate() + 3); return toISO(d) })()
+                        const pickNear = (rows: FCRow[], ref: string) => {
+                          if (!rows.length) return 0
+                          const byDate: Record<string, number> = {}
+                          rows.forEach(r => { byDate[r.date] = (byDate[r.date] || 0) + r.amount })
+                          const refMs = new Date(ref + 'T00:00:00').getTime()
+                          let bd = '', bdist = Infinity
+                          for (const d of Object.keys(byDate)) {
+                            const ms = new Date(d + 'T00:00:00').getTime()
+                            const diff = (ms - refMs) / 86400000
+                            if (diff < -30 || diff > 3) continue
+                            const dist = Math.abs(diff)
+                            if (dist < bdist || (dist === bdist && d <= ref)) { bdist = dist; bd = d }
+                          }
+                          return bd ? byDate[bd] : 0
+                        }
+                        const invInStore = foodCost.inventory.filter(i => i.store === sName && !isAutoEx(i.vendor))
+                        const byVendor: Record<string, FCRow[]> = {}
+                        invInStore.forEach(r => { (byVendor[r.vendor] ||= []).push(r) })
+                        let begin = 0, end = 0
+                        for (const rows of Object.values(byVendor)) {
+                          begin += pickNear(rows, dateFrom)
+                          end += pickNear(rows, toPlus3)
+                        }
+                        foodUsage = Math.max(0, begin + purTotal - end)
+                      }
+                      const foodRatio = s.rev > 0 ? foodUsage / s.rev * 100 : 0
+
+                      // 該分店人事成本
+                      const hrStore = hrSnapshot?.byStore.find(b => b.cat === sName || sName.includes(b.cat) || b.cat.includes(sName))
+                      const hrCost = hrStore?.totalCost || 0
+                      const hrRatio = s.rev > 0 ? hrCost / s.rev * 100 : 0
+                      const totalCostRatio = foodRatio + hrRatio
+
+                      const ratioColor = (r: number) => r > 35 ? '#dc2626' : r > 30 ? '#d97706' : '#16a34a'
+                      const totalColor = (r: number) => r > 65 ? '#dc2626' : r > 55 ? '#d97706' : '#16a34a'
+
+                      return (
+                        <tr key={key} style={{ borderBottom: '1px solid #f0eee9' }}>
+                          <td style={{ padding: '10px 14px', fontWeight: 600, color: '#1a2f4e' }}>{s.displayName}</td>
+                          <td style={{ padding: '10px 14px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>${fmt(s.rev)}</td>
+                          <td style={{ padding: '10px 14px', textAlign: 'right', color: '#6b7280', fontVariantNumeric: 'tabular-nums' }}>{foodCost ? `$${fmt(foodUsage)}` : '—'}</td>
+                          <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: foodCost && s.rev > 0 ? ratioColor(foodRatio) : '#d1d5db' }}>
+                            {foodCost && s.rev > 0 ? `${foodRatio.toFixed(2)}%` : '—'}
+                          </td>
+                          <td style={{ padding: '10px 14px', textAlign: 'right', color: '#6b7280', fontVariantNumeric: 'tabular-nums' }}>
+                            {hrSnapshot ? (hrCost > 0 ? `$${fmt(hrCost)}` : '—') : '—'}
+                          </td>
+                          <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: hrSnapshot && hrCost > 0 && s.rev > 0 ? ratioColor(hrRatio) : '#d1d5db' }}>
+                            {hrSnapshot && hrCost > 0 && s.rev > 0 ? `${hrRatio.toFixed(2)}%` : '—'}
+                          </td>
+                          <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: foodCost && hrSnapshot && hrCost > 0 && s.rev > 0 ? totalColor(totalCostRatio) : '#d1d5db' }}>
+                            {foodCost && hrSnapshot && hrCost > 0 && s.rev > 0 ? `${totalCostRatio.toFixed(2)}%` : '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+                {!hrSnapshot && (
+                  <div style={{ padding: '8px 16px', fontSize: 11, color: '#9ca3af', background: '#fafaf8', borderTop: '1px solid #f0eee9' }}>
+                    ⚠️ 人事成本欄位需要先到 <a href="/hr" style={{ color: BRAND, fontWeight: 600 }}>HR 頁面</a> 上傳檔案計算過才會顯示
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* 月份保底業績卡片 */}
           {hasTargets && (
