@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import { toISO, fmt } from '@/lib/ragic/utils'
 import { processRecords, filterByStoreType, StoreRecord } from '@/lib/ragic/processRecords'
@@ -105,6 +105,28 @@ export default function DashboardPage() {
   const [targets, setTargets] = useState<Record<string, number>>({})
   const [totalRecords, setTotalRecords] = useState(0)
 
+  // 食材成本 + 人事成本 snapshot
+  type FCRow = { date: string; store: string; vendor: string; amount: number }
+  type FCPurchase = FCRow & { isStaffOnly: boolean; staffMeal: number }
+  type FoodCostData = { purchases: FCPurchase[]; inventory: FCRow[] }
+  type HRSnapshot = {
+    calcAt: number; year: number; month: number; viewMode: string; dateFrom: string; dateTo: string
+    totalCost: number
+    byStore: { cat: string; totalCost: number }[]
+  }
+  const [foodCost, setFoodCost] = useState<FoodCostData | null>(null)
+  const [hrSnapshot, setHrSnapshot] = useState<HRSnapshot | null>(null)
+
+  useEffect(() => {
+    fetch('/api/food-cost').then(r => r.ok ? r.json() : null).then(d => {
+      if (d && Array.isArray(d.purchases)) setFoodCost({ purchases: d.purchases, inventory: d.inventory || [] })
+    }).catch(() => { /* ignore */ })
+    try {
+      const raw = localStorage.getItem('hr_last_result')
+      if (raw) setHrSnapshot(JSON.parse(raw))
+    } catch { /* ignore */ }
+  }, [])
+
   const mounted = useRef(false)
 
   const fetchData = useCallback(async (fromOverride?: string, toOverride?: string) => {
@@ -188,6 +210,89 @@ export default function DashboardPage() {
   const storeList = Object.entries(filtered).sort((a, b) => b[1].rev - a[1].rev)
   const hasData = storeList.length > 0
   const hasTargets = Object.keys(targets).length > 0
+
+  // ---- 成本計算 helpers ----
+  const ALWAYS_EXCLUDE = ['樂清']
+  const isAutoEx = (v: string) => ALWAYS_EXCLUDE.some(k => v.includes(k))
+
+  const addDaysISO = (date: string, days: number) => {
+    const d = new Date(date + 'T00:00:00')
+    d.setDate(d.getDate() + days)
+    return toISO(d)
+  }
+  const daysBetween = (a: string, b: string) => {
+    const ms = new Date(b + 'T00:00:00').getTime() - new Date(a + 'T00:00:00').getTime()
+    return Math.floor(ms / 86400000) + 1
+  }
+  const pickNearest = (rows: FCRow[], refDate: string): number => {
+    if (!rows.length) return 0
+    const byDate: Record<string, number> = {}
+    rows.forEach(r => { byDate[r.date] = (byDate[r.date] || 0) + r.amount })
+    const refMs = new Date(refDate + 'T00:00:00').getTime()
+    let bestD = '', bestDist = Infinity
+    for (const d of Object.keys(byDate)) {
+      const dMs = new Date(d + 'T00:00:00').getTime()
+      const diffD = (dMs - refMs) / 86400000
+      if (diffD < -30 || diffD > 3) continue
+      const dist = Math.abs(diffD)
+      if (dist < bestDist || (dist === bestDist && d <= refDate)) { bestDist = dist; bestD = d }
+    }
+    return bestD ? byDate[bestD] : 0
+  }
+
+  // 給定分店清單，算食材使用量 + 員工餐金額
+  const computeFood = (storeNames: Set<string>) => {
+    if (!foodCost) return { usage: 0, staffMeal: 0 }
+    const toPlus3 = addDaysISO(dateTo, 3)
+    const purIn = foodCost.purchases.filter(p =>
+      p.date >= dateFrom && p.date <= dateTo &&
+      storeNames.has(p.store) && !p.isStaffOnly && !isAutoEx(p.vendor)
+    )
+    const purTotal = purIn.reduce((s, p) => s + p.amount, 0)
+    const staffMeal = foodCost.purchases.filter(p =>
+      p.date >= dateFrom && p.date <= dateTo &&
+      storeNames.has(p.store) && !isAutoEx(p.vendor)
+    ).reduce((s, p) => s + (p.staffMeal || 0), 0)
+    const invIn = foodCost.inventory.filter(i => storeNames.has(i.store) && !isAutoEx(i.vendor))
+    const byKey: Record<string, FCRow[]> = {}
+    invIn.forEach(r => { (byKey[`${r.store}#${r.vendor}`] ||= []).push(r) })
+    let begin = 0, end = 0
+    for (const rows of Object.values(byKey)) {
+      begin += pickNearest(rows, dateFrom)
+      end += pickNearest(rows, toPlus3)
+    }
+    return { usage: Math.max(0, begin + purTotal - end), staffMeal }
+  }
+
+  // HR snapshot 按日攤算
+  const hrProration = useMemo(() => {
+    if (!hrSnapshot) return null
+    let hrFrom: string, hrTo: string
+    if (hrSnapshot.viewMode === 'month') {
+      const lastDay = new Date(hrSnapshot.year, hrSnapshot.month, 0).getDate()
+      const pad = (n: number) => String(n).padStart(2, '0')
+      hrFrom = `${hrSnapshot.year}-${pad(hrSnapshot.month)}-01`
+      hrTo = `${hrSnapshot.year}-${pad(hrSnapshot.month)}-${pad(lastDay)}`
+    } else {
+      hrFrom = hrSnapshot.dateFrom || ''
+      hrTo = hrSnapshot.dateTo || ''
+    }
+    if (!hrFrom || !hrTo) return null
+    const hrDays = daysBetween(hrFrom, hrTo)
+    const overlapFrom = dateFrom > hrFrom ? dateFrom : hrFrom
+    const overlapTo = dateTo < hrTo ? dateTo : hrTo
+    const overlapDays = overlapFrom <= overlapTo ? daysBetween(overlapFrom, overlapTo) : 0
+    const ratio = hrDays > 0 ? overlapDays / hrDays : 0
+    return { hrFrom, hrTo, hrDays, overlapDays, ratio }
+  }, [hrSnapshot, dateFrom, dateTo])
+
+  // 整體成本 KPI
+  const allStoreNames = useMemo(() => new Set<string>(storeList.map(([, s]) => s.displayName)), [storeList])
+  const foodOverall = useMemo(() => computeFood(allStoreNames), [foodCost, dateFrom, dateTo, allStoreNames])
+  const foodRatio = totalRev > 0 ? foodOverall.usage / totalRev * 100 : 0
+  const staffMealRatio = totalRev > 0 ? foodOverall.staffMeal / totalRev * 100 : 0
+  const hrCostProrated = hrSnapshot && hrProration ? hrSnapshot.totalCost * hrProration.ratio : 0
+  const hrRatio = totalRev > 0 && hrCostProrated > 0 ? hrCostProrated / totalRev * 100 : 0
 
   const trendData = dateEntries.map(([date, rev]) => ({ date: date.slice(5), rev }))
   const donutData = storeList.map(([, s]) => ({ name: s.displayName, value: s.rev }))
@@ -279,6 +384,81 @@ export default function DashboardPage() {
               <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>查詢分店數</div>
               <div style={{ fontSize: 24, fontWeight: 700, color: '#1a2f4e' }}>{storeList.length}</div>
               <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>共 {totalRecords} 筆資料</div>
+            </div>
+          </div>
+
+          {/* 💰 成本概況：3 張比例卡 */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#1a2f4e', marginBottom: 8 }}>
+              💰 成本概況 <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 400 }}>（依目前篩選的期間與分店）</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+              <RatioCard label="食材成本比例" value={foodCost ? foodRatio : null} sub="食材使用 / 營業額" thresholds={{ green: 30, amber: 35 }} href="/food-cost" />
+              <RatioCard label="人事成本比例" value={hrSnapshot && hrCostProrated > 0 && totalRev > 0 ? hrRatio : null} sub={hrSnapshot ? `人事支出 / 營業額 · ${hrProration?.overlapDays || 0}/${hrProration?.hrDays || 0} 天` : '未計算 → 點此前往 HR'} thresholds={{ green: 35, amber: 40 }} href="/hr" />
+              <RatioCard label="員工餐比例" value={foodCost ? staffMealRatio : null} sub="員工餐 / 營業額（已從食材成本扣除）" thresholds={{ green: 2, amber: 3 }} href="/food-cost" />
+            </div>
+          </div>
+
+          {/* 🏪 分店成本明細 */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#1a2f4e', marginBottom: 8 }}>🏪 分店成本明細</div>
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: '#fafaf8' }}>
+                    {['分店', '營業額', '食材使用', '食材率', '人事成本', '人事率', '員工餐率', '合計成本率'].map((h, i) => (
+                      <th key={h} style={{ padding: '12px 14px', textAlign: i === 0 ? 'left' : 'right', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1', whiteSpace: 'nowrap', fontSize: 12 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {storeList.map(([key, s]) => {
+                    const sName = s.displayName
+                    const storeSet = new Set([sName])
+                    const fc = computeFood(storeSet)
+                    const fRatio = s.rev > 0 ? fc.usage / s.rev * 100 : 0
+                    const smRatio = s.rev > 0 ? fc.staffMeal / s.rev * 100 : 0
+                    const hrStore = hrSnapshot?.byStore.find(b => b.cat === sName || sName.includes(b.cat) || b.cat.includes(sName))
+                    const hrCost = hrStore && hrProration ? Math.round(hrStore.totalCost * hrProration.ratio) : 0
+                    const hrR = s.rev > 0 ? hrCost / s.rev * 100 : 0
+                    const totalR = fRatio + hrR
+                    return (
+                      <tr key={key} style={{ borderBottom: '1px solid #f0eee9' }}>
+                        <td style={{ padding: '10px 14px', fontWeight: 600 }}>{s.displayName}</td>
+                        <td style={tdNum}>${fmt(s.rev)}</td>
+                        <td style={{ ...tdNum, color: '#6b7280' }}>{foodCost ? `$${fmt(fc.usage)}` : '—'}</td>
+                        <td style={tdNum}>{foodCost && s.rev > 0 ? <Pill v={fRatio} g={30} a={35} /> : '—'}</td>
+                        <td style={{ ...tdNum, color: '#6b7280' }}>{hrSnapshot && hrCost > 0 ? `$${fmt(hrCost)}` : '—'}</td>
+                        <td style={tdNum}>{hrSnapshot && hrCost > 0 && s.rev > 0 ? <Pill v={hrR} g={35} a={40} /> : '—'}</td>
+                        <td style={tdNum}>{foodCost && s.rev > 0 ? <Pill v={smRatio} g={2} a={3} /> : '—'}</td>
+                        <td style={tdNum}>{foodCost && hrSnapshot && hrCost > 0 && s.rev > 0 ? <Pill v={totalR} g={65} a={75} /> : '—'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background: '#f7f1e9', fontWeight: 700 }}>
+                    <td style={{ padding: '10px 14px' }}>合計</td>
+                    <td style={tdNum}>${fmt(totalRev)}</td>
+                    <td style={{ ...tdNum, color: '#1a2f4e' }}>{foodCost ? `$${fmt(foodOverall.usage)}` : '—'}</td>
+                    <td style={tdNum}>{foodCost && totalRev > 0 ? <Pill v={foodRatio} g={30} a={35} /> : '—'}</td>
+                    <td style={{ ...tdNum, color: '#1a2f4e' }}>{hrSnapshot && hrCostProrated > 0 ? `$${fmt(Math.round(hrCostProrated))}` : '—'}</td>
+                    <td style={tdNum}>{hrSnapshot && hrCostProrated > 0 && totalRev > 0 ? <Pill v={hrRatio} g={35} a={40} /> : '—'}</td>
+                    <td style={tdNum}>{foodCost && totalRev > 0 ? <Pill v={staffMealRatio} g={2} a={3} /> : '—'}</td>
+                    <td style={tdNum}>{foodCost && hrSnapshot && hrCostProrated > 0 && totalRev > 0 ? <Pill v={foodRatio + hrRatio} g={65} a={75} /> : '—'}</td>
+                  </tr>
+                </tfoot>
+              </table>
+              {hrSnapshot && hrProration && (
+                <div style={{ padding: '8px 16px', fontSize: 11, color: '#6b7280', background: '#fafaf8', borderTop: '1px solid #f0eee9' }}>
+                  💡 人事成本來自 <a href="/hr" style={{ color: BRAND, fontWeight: 600 }}>HR 頁面</a> 最後一次計算（{hrProration.hrFrom} ~ {hrProration.hrTo}，{hrProration.hrDays} 天），切日期會按重疊 {hrProration.overlapDays} 天比例（{(hrProration.ratio * 100).toFixed(1)}%）攤算
+                </div>
+              )}
+              {!hrSnapshot && (
+                <div style={{ padding: '8px 16px', fontSize: 11, color: '#9ca3af', background: '#fafaf8', borderTop: '1px solid #f0eee9' }}>
+                  ⚠️ 人事成本欄位需要先到 <a href="/hr" style={{ color: BRAND, fontWeight: 600 }}>HR 頁面</a> 上傳檔案計算過才會顯示
+                </div>
+              )}
             </div>
           </div>
 
@@ -387,5 +567,50 @@ export default function DashboardPage() {
         </>
       )}
     </div>
+  )
+}
+
+// ---- Helpers ----
+const tdNum: React.CSSProperties = {
+  padding: '10px 14px',
+  textAlign: 'right',
+  fontVariantNumeric: 'tabular-nums',
+  whiteSpace: 'nowrap',
+}
+
+function Pill({ v, g, a }: { v: number; g: number; a: number }) {
+  const bg = v <= g ? '#dcfce7' : v <= a ? '#fef3c7' : '#fee2e2'
+  const fg = v <= g ? '#16a34a' : v <= a ? '#d97706' : '#dc2626'
+  return (
+    <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 20, background: bg, color: fg, fontSize: 11, fontWeight: 600 }}>
+      {v.toFixed(2)}%
+    </span>
+  )
+}
+
+function RatioCard({ label, value, sub, thresholds, href }: {
+  label: string; value: number | null; sub: string
+  thresholds: { green: number; amber: number }
+  href: string
+}) {
+  const hasValue = value !== null && Number.isFinite(value)
+  const tier = !hasValue ? 'none' : value! <= thresholds.green ? 'green' : value! <= thresholds.amber ? 'amber' : 'red'
+  const bg = tier === 'green' ? '#dcfce7' : tier === 'amber' ? '#fef3c7' : tier === 'red' ? '#fee2e2' : '#fff'
+  const border = tier === 'green' ? '#86efac' : tier === 'amber' ? '#fbbf24' : tier === 'red' ? '#fca5a5' : '#e8e6e1'
+  const fg = tier === 'green' ? '#16a34a' : tier === 'amber' ? '#d97706' : tier === 'red' ? '#dc2626' : '#9ca3af'
+  return (
+    <a href={href} style={{
+      background: bg, borderRadius: 12, padding: '16px 20px',
+      border: `1px solid ${border}`, textDecoration: 'none', display: 'block',
+    }}>
+      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, display: 'flex', justifyContent: 'space-between' }}>
+        <span>{label}</span>
+        <span style={{ color: '#3c2929' }}>→</span>
+      </div>
+      <div style={{ fontSize: 26, fontWeight: 700, color: fg }}>
+        {hasValue ? `${value!.toFixed(2)}%` : '—'}
+      </div>
+      <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>{sub}</div>
+    </a>
   )
 }

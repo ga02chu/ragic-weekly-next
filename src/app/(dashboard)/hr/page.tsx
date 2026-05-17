@@ -244,6 +244,17 @@ export default function HRPage() {
       setStoreDist(dist)
       setCrossStore(computeCrossStoreDetail(result.results, result.locR, brk))
 
+      // 把人事成本摘要存進 localStorage，讓總覽頁能讀到
+      try {
+        const snapshot = {
+          calcAt: Date.now(),
+          year, month, viewMode, dateFrom, dateTo,
+          totalCost: dist.reduce((s, d) => s + d.totalCost, 0),
+          byStore: dist.map(d => ({ cat: d.cat, totalCost: d.totalCost })),
+        }
+        localStorage.setItem('hr_last_result', JSON.stringify(snapshot))
+      } catch { /* ignore */ }
+
       // Fetch Ragic revenue for chart comparison
       try {
         const allRecords = await fetchAllRecords()
