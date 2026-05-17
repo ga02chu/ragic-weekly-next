@@ -39,8 +39,9 @@ function toNum(v: unknown): number {
 
 async function fetchRagic(path: string, token: string, limit = 5000) {
   const url = `https://ap7.ragic.com/${path}?api&limit=${limit}&subtables=0&APIKey=${token}`
+  // 50 秒 timeout（Vercel function maxDuration=60，三個 API 並行最慢這個也跑得完）
   const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), 25_000)
+  const timer = setTimeout(() => ctrl.abort(), 50_000)
   try {
     const res = await fetch(url, { signal: ctrl.signal, next: { revalidate: 300 } })
     if (!res.ok) return []
