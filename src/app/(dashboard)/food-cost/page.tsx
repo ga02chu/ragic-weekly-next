@@ -164,18 +164,30 @@ export default function FoodCostPage() {
     const invFiltered = storeFilter === '__ALL__'
       ? data.inventory
       : data.inventory.filter(p => p.store === storeFilter)
+    const purFiltered = storeFilter === '__ALL__'
+      ? data.purchases
+      : data.purchases.filter(p => p.store === storeFilter)
 
     const prevDay = addDays(new Date(from + 'T00:00:00'), -1)
     const prevDayISO = toISO(prevDay)
 
+    // 「幽靈廠商」過濾：到參考日為止，距離最近一筆盤點或進貨超過 60 天 → 視為休眠
+    const STALE_DAYS = 60
+    const cutoff = toISO(addDays(new Date(to + 'T00:00:00'), -STALE_DAYS))
+    const recentVendors = new Set<string>()
+    invFiltered.forEach(r => { if (r.date >= cutoff && r.date <= to) recentVendors.add(r.vendor) })
+    purFiltered.forEach(p => { if (p.date >= cutoff && p.date <= to) recentVendors.add(p.vendor) })
+
     // 順序直接照 vendorsForStore（已按歷史總進貨排好），不再二次排序
-    const rows = vendorsForStore.map(vendor => {
-      const begin = latestInventoryBefore(invFiltered, prevDayISO, vendor, storeFilter)
-      const purchases = inRange.filter(p => p.vendor === vendor).reduce((s, p) => s + p.amount, 0)
-      const end = latestInventoryBefore(invFiltered, to, vendor, storeFilter)
-      const usage = begin + purchases - end
-      return { vendor, begin, purchases, end, usage }
-    })
+    const rows = vendorsForStore
+      .filter(v => recentVendors.has(v))
+      .map(vendor => {
+        const begin = latestInventoryBefore(invFiltered, prevDayISO, vendor, storeFilter)
+        const purchases = inRange.filter(p => p.vendor === vendor).reduce((s, p) => s + p.amount, 0)
+        const end = latestInventoryBefore(invFiltered, to, vendor, storeFilter)
+        const usage = begin + purchases - end
+        return { vendor, begin, purchases, end, usage }
+      })
 
     // onlyActive=true：只藏「四欄全 0」（純粹這分店沒記錄）的廠商。
     // 有期初／期末庫存（即使沒進貨沒使用）也視為「有資料」要顯示，避免漏掉穩定庫存的廠商
