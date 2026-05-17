@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import { toISO, fmt } from '@/lib/ragic/utils'
 import { processRecords, filterByStoreType, StoreRecord } from '@/lib/ragic/processRecords'
@@ -105,6 +105,16 @@ export default function DashboardPage() {
   const [targets, setTargets] = useState<Record<string, number>>({})
   const [totalRecords, setTotalRecords] = useState(0)
 
+  // 食材成本資料（同 /food-cost 來源）
+  type FCRow = { date: string; store: string; vendor: string; amount: number }
+  type FCPurchase = FCRow & { isStaffOnly: boolean; staffMeal: number }
+  const [foodCost, setFoodCost] = useState<{ purchases: FCPurchase[]; inventory: FCRow[] } | null>(null)
+  useEffect(() => {
+    fetch('/api/food-cost').then(r => r.ok ? r.json() : null).then(d => {
+      if (d && d.purchases) setFoodCost({ purchases: d.purchases, inventory: d.inventory || [] })
+    }).catch(() => { /* ignore */ })
+  }, [])
+
   const mounted = useRef(false)
 
   const fetchData = useCallback(async (fromOverride?: string, toOverride?: string) => {
@@ -188,6 +198,62 @@ export default function DashboardPage() {
   const storeList = Object.entries(filtered).sort((a, b) => b[1].rev - a[1].rev)
   const hasData = storeList.length > 0
   const hasTargets = Object.keys(targets).length > 0
+
+  // 食材成本摘要（依當前 dateFrom-dateTo + storeFilter）
+  const foodSummary = useMemo(() => {
+    if (!foodCost) return null
+    const storesInScope = new Set<string>(storeList.map(([, s]) => s.displayName))
+    const ALWAYS_EXCLUDE = ['樂清']
+    const isAutoEx = (v: string) => ALWAYS_EXCLUDE.some(k => v.includes(k))
+
+    const fromD = dateFrom
+    const toD = dateTo
+    const toPlus3D = (() => { const d = new Date(toD + 'T00:00:00'); d.setDate(d.getDate() + 3); return toISO(d) })()
+
+    // 進貨：在範圍內 + 非「整單員工餐」+ 名稱不含樂清
+    const purInRange = foodCost.purchases.filter(p =>
+      p.date >= fromD && p.date <= toD &&
+      storesInScope.has(p.store) &&
+      !p.isStaffOnly &&
+      !isAutoEx(p.vendor)
+    )
+    const purTotal = purInRange.reduce((s, p) => s + p.amount, 0)
+
+    // 員工餐 (整單員工餐) 金額
+    const staffMeal = foodCost.purchases.filter(p =>
+      p.date >= fromD && p.date <= toD &&
+      storesInScope.has(p.store) &&
+      !isAutoEx(p.vendor)
+    ).reduce((s, p) => s + (p.staffMeal || 0), 0)
+
+    // 期初 / 期末：找離 ref 最近的盤點（±3 天 grace），對每個 (store, vendor) 各算
+    const pickNearest = (rows: FCRow[], refDate: string) => {
+      if (!rows.length) return 0
+      const byDate: Record<string, number> = {}
+      rows.forEach(r => { byDate[r.date] = (byDate[r.date] || 0) + r.amount })
+      const refMs = new Date(refDate + 'T00:00:00').getTime()
+      let bestD = '', bestDist = Infinity
+      for (const d of Object.keys(byDate)) {
+        const ms = new Date(d + 'T00:00:00').getTime()
+        const diff = (ms - refMs) / 86400000
+        if (diff < -30 || diff > 3) continue
+        const dist = Math.abs(diff)
+        if (dist < bestDist || (dist === bestDist && d <= refDate)) { bestDist = dist; bestD = d }
+      }
+      return bestD ? byDate[bestD] : 0
+    }
+    const invInScope = foodCost.inventory.filter(i => storesInScope.has(i.store) && !isAutoEx(i.vendor))
+    const byStoreVendor: Record<string, FCRow[]> = {}
+    invInScope.forEach(r => { (byStoreVendor[`${r.store}#${r.vendor}`] ||= []).push(r) })
+    let begin = 0, end = 0
+    for (const rows of Object.values(byStoreVendor)) {
+      begin += pickNearest(rows, fromD)
+      end += pickNearest(rows, toPlus3D)
+    }
+    const usage = Math.max(0, begin + purTotal - end)
+    const ratio = totalRev > 0 ? (usage / totalRev) * 100 : 0
+    return { usage, purTotal, staffMeal, ratio, begin, end }
+  }, [foodCost, dateFrom, dateTo, storeList, totalRev])
 
   const trendData = dateEntries.map(([date, rev]) => ({ date: date.slice(5), rev }))
   const donutData = storeList.map(([, s]) => ({ name: s.displayName, value: s.rev }))
@@ -279,6 +345,78 @@ export default function DashboardPage() {
               <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>查詢分店數</div>
               <div style={{ fontSize: 24, fontWeight: 700, color: '#1a2f4e' }}>{storeList.length}</div>
               <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>共 {totalRecords} 筆資料</div>
+            </div>
+          </div>
+
+          {/* 成本概況：食材成本 + 人事成本入口 */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#1a2f4e', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>📊 成本概況</span>
+              <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 400 }}>（依目前篩選的期間與分店）</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+              {/* 食材使用量 */}
+              <a href="/food-cost" style={{ background: '#fff', borderRadius: 12, padding: '16px 20px', border: '1px solid #e8e6e1', textDecoration: 'none', display: 'block', transition: 'transform 0.15s', position: 'relative' }}>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, display: 'flex', justifyContent: 'space-between' }}>
+                  <span>食材使用量</span>
+                  <span style={{ color: BRAND }}>→</span>
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: '#1a2f4e' }}>
+                  ${foodSummary ? fmt(foodSummary.usage) : '—'}
+                </div>
+                <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                  期初 ${foodSummary ? fmt(foodSummary.begin) : '—'} + 進貨 ${foodSummary ? fmt(foodSummary.purTotal) : '—'} − 期末 ${foodSummary ? fmt(foodSummary.end) : '—'}
+                </div>
+              </a>
+
+              {/* 食材成本率 */}
+              <a href="/food-cost" style={{
+                background: foodSummary && totalRev > 0
+                  ? (foodSummary.ratio > 35 ? '#fee2e2' : foodSummary.ratio > 30 ? '#fef3c7' : '#dcfce7')
+                  : '#fff',
+                borderRadius: 12, padding: '16px 20px',
+                border: `1px solid ${foodSummary && totalRev > 0 ? (foodSummary.ratio > 35 ? '#fca5a5' : foodSummary.ratio > 30 ? '#fbbf24' : '#86efac') : '#e8e6e1'}`,
+                textDecoration: 'none', display: 'block',
+              }}>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, display: 'flex', justifyContent: 'space-between' }}>
+                  <span>食材成本率</span>
+                  <span style={{ color: BRAND }}>→</span>
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: foodSummary && totalRev > 0 ? (foodSummary.ratio > 35 ? '#dc2626' : foodSummary.ratio > 30 ? '#d97706' : '#16a34a') : '#9ca3af' }}>
+                  {foodSummary && totalRev > 0 ? `${foodSummary.ratio.toFixed(2)}%` : '—'}
+                </div>
+                <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                  健康範圍 ≤30% 🟢｜30-35% 🟡｜&gt;35% 🔴
+                </div>
+              </a>
+
+              {/* 員工餐金額 */}
+              <a href="/food-cost" style={{ background: '#fff', borderRadius: 12, padding: '16px 20px', border: '1px solid #e8e6e1', textDecoration: 'none', display: 'block' }}>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, display: 'flex', justifyContent: 'space-between' }}>
+                  <span>員工餐金額</span>
+                  <span style={{ color: BRAND }}>→</span>
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: '#d97706' }}>
+                  ${foodSummary ? fmt(foodSummary.staffMeal) : '—'}
+                </div>
+                <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                  含整單員工餐 + 混合單員工餐 line items
+                </div>
+              </a>
+
+              {/* 人事成本入口 */}
+              <a href="/hr" style={{ background: '#fff', borderRadius: 12, padding: '16px 20px', border: '1px solid #e8e6e1', textDecoration: 'none', display: 'block' }}>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, display: 'flex', justifyContent: 'space-between' }}>
+                  <span>人事成本</span>
+                  <span style={{ color: BRAND }}>→</span>
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: '#1a2f4e' }}>
+                  前往 HR 詳細試算
+                </div>
+                <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                  需上傳薪資/打卡/地點檔案計算
+                </div>
+              </a>
             </div>
           </div>
 
