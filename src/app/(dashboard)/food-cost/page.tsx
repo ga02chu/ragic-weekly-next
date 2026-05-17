@@ -44,14 +44,40 @@ function fmtDateRange(from: string, to: string) {
   return `${y1} 年 ${m1}/${d1} – ${m2}/${d2}`
 }
 
-// 對 (vendor, store) 找 ≤ refDate 的盤點金額：
-// 取「最近一天」的所有 record 加總（同日多筆 = 不同倉位/分批盤，全部 sum）。
-// 不做歷史 carry-forward — 如果某天漏盤、使用量會變負，UI 端會打警告但忠實顯示 Ragic 資料。
+// 對 (vendor, store) 找「離 refDate 最近」的盤點（容許往後最多 3 天）。
+// 同一天多筆 = 不同倉位/分批盤，全部 sum。
+// 例：refDate=5/3
+//   - 韓廣 5/3=57k, 5/5=58k → 取 5/3（距 0 天 < 5/5 距 2 天）
+//   - 巨沅 4/30=27k, 5/4=21k → 取 5/4（距 1 天 < 4/30 距 3 天）符合「週一早上盤上週末」
+function pickNearestDateSum(rows: Row[], refDate: string): number {
+  if (!rows.length) return 0
+  const byDate: Record<string, number> = {}
+  rows.forEach(r => { byDate[r.date] = (byDate[r.date] || 0) + r.amount })
+  const refMs = new Date(refDate + 'T00:00:00').getTime()
+  const WINDOW_BEFORE = 30   // 最多看 30 天前
+  const WINDOW_AFTER = 3     // 最多看 3 天後（下週一才盤的情況）
+  let bestDate = ''
+  let bestDist = Infinity
+  for (const d of Object.keys(byDate)) {
+    const dMs = new Date(d + 'T00:00:00').getTime()
+    const diffDays = (dMs - refMs) / 86400000
+    if (diffDays < -WINDOW_BEFORE || diffDays > WINDOW_AFTER) continue
+    const dist = Math.abs(diffDays)
+    if (dist < bestDist || (dist === bestDist && d <= refDate)) {
+      bestDist = dist
+      bestDate = d
+    }
+  }
+  if (bestDate) return byDate[bestDate]
+  // 都不在 window 內，fallback 取 ≤ ref 最新（即使很舊）
+  const olderDates = Object.keys(byDate).filter(d => d <= refDate).sort().reverse()
+  return olderDates.length ? byDate[olderDates[0]] : 0
+}
+
 function latestInventoryBefore(inv: Row[], refDate: string, vendor: string, store: string): number {
   const filtered = inv.filter(r =>
     r.vendor === vendor &&
-    (store === '__ALL__' || r.store === store) &&
-    r.date <= refDate
+    (store === '__ALL__' || r.store === store)
   )
   if (!filtered.length) return 0
   if (store === '__ALL__') {
@@ -59,15 +85,11 @@ function latestInventoryBefore(inv: Row[], refDate: string, vendor: string, stor
     filtered.forEach(r => { (byStore[r.store] ||= []).push(r) })
     let total = 0
     for (const rows of Object.values(byStore)) {
-      rows.sort((a, b) => b.date.localeCompare(a.date))
-      const latestDate = rows[0].date
-      total += rows.filter(r => r.date === latestDate).reduce((s, r) => s + r.amount, 0)
+      total += pickNearestDateSum(rows, refDate)
     }
     return total
   }
-  filtered.sort((a, b) => b.date.localeCompare(a.date))
-  const latestDate = filtered[0].date
-  return filtered.filter(r => r.date === latestDate).reduce((s, r) => s + r.amount, 0)
+  return pickNearestDateSum(filtered, refDate)
 }
 
 export default function FoodCostPage() {
@@ -168,9 +190,8 @@ export default function FoodCostPage() {
       ? data.purchases
       : data.purchases.filter(p => p.store === storeFilter)
 
-    // 期初 = latest 盤點 ≤ from（含週一當天）— 週一早上的盤點實際反映上週末庫存
-    // 期末 = latest 盤點 ≤ to + 3 天 — 若 to 當日沒盤、隔週週一才盤也算
-    const toPlus3 = toISO(addDays(new Date(to + 'T00:00:00'), 3))
+    // 期初 ref = from（找最接近 from 的盤點）
+    // 期末 ref = to（找最接近 to 的盤點，函數內部自動允許 ±3 天）
 
     // 「幽靈廠商」過濾：到參考日為止，距離最近一筆盤點或進貨超過 60 天 → 視為休眠
     const STALE_DAYS = 60
@@ -185,7 +206,7 @@ export default function FoodCostPage() {
       .map(vendor => {
         const begin = latestInventoryBefore(invFiltered, from, vendor, storeFilter)
         const purchases = inRange.filter(p => p.vendor === vendor).reduce((s, p) => s + p.amount, 0)
-        const end = latestInventoryBefore(invFiltered, toPlus3, vendor, storeFilter)
+        const end = latestInventoryBefore(invFiltered, to, vendor, storeFilter)
         const usage = begin + purchases - end
         return { vendor, begin, purchases, end, usage }
       })
