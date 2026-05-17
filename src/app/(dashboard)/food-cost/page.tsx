@@ -136,6 +136,26 @@ export default function FoodCostPage() {
     return () => { cancelled = true }
   }, [])
 
+  // 排除廠商清單（不計入食材成本，跨分店共用，存 localStorage）
+  const [excludedVendors, setExcludedVendors] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('food_cost_excluded_vendors')
+      if (raw) {
+        const arr = JSON.parse(raw)
+        if (Array.isArray(arr)) setExcludedVendors(new Set(arr))
+      }
+    } catch { /* ignore */ }
+  }, [])
+  const toggleExclude = (vendor: string) => {
+    setExcludedVendors(prev => {
+      const next = new Set(prev)
+      if (next.has(vendor)) next.delete(vendor); else next.add(vendor)
+      try { localStorage.setItem('food_cost_excluded_vendors', JSON.stringify(Array.from(next))) } catch { /* ignore */ }
+      return next
+    })
+  }
+
   // 營業額：客端篩日期+分店
   const revenue = useMemo(() => {
     if (!salesRecords) return 0
@@ -203,6 +223,7 @@ export default function FoodCostPage() {
     // 順序直接照 vendorsForStore（已按歷史總進貨排好），不再二次排序
     const rows = vendorsForStore
       .filter(v => recentVendors.has(v))
+      .filter(v => !excludedVendors.has(v))
       .map(vendor => {
         const begin = latestInventoryBefore(invFiltered, from, vendor, storeFilter)
         const purchases = inRange.filter(p => p.vendor === vendor).reduce((s, p) => s + p.amount, 0)
@@ -216,7 +237,7 @@ export default function FoodCostPage() {
     return onlyActive
       ? rows.filter(r => r.begin !== 0 || r.purchases !== 0 || r.end !== 0 || r.usage !== 0)
       : rows
-  }, [data, from, to, storeFilter, excludeStaffMeal, vendorsForStore, onlyActive])
+  }, [data, from, to, storeFilter, excludeStaffMeal, vendorsForStore, onlyActive, excludedVendors])
 
   const totals = useMemo(() => {
     return tableRows.reduce((acc, r) => ({
@@ -377,8 +398,8 @@ export default function FoodCostPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: '#fafaf8' }}>
-                    {['廠商', '期初存貨', '本週進貨', '期末盤點', '本週使用量', '占比', '佔營業額'].map((h, i) => (
-                      <th key={h} style={{ padding: '10px 14px', textAlign: i === 0 ? 'left' : 'right', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1', whiteSpace: 'nowrap' }}>{h}</th>
+                    {['廠商', '期初存貨', '本週進貨', '期末盤點', '本週使用量', '占比', '佔營業額', ''].map((h, i) => (
+                      <th key={i} style={{ padding: '10px 14px', textAlign: i === 0 ? 'left' : 'right', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -405,6 +426,15 @@ export default function FoodCostPage() {
                         <td style={{ ...tdNum(revPct, revenue > 0 ? '#16a34a' : '#d1d5db'), fontSize: 12, fontWeight: 600 }}>
                           {revenue > 0 ? `${revPct.toFixed(2)}%` : '—'}
                         </td>
+                        <td style={{ padding: '4px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          <button
+                            onClick={() => toggleExclude(r.vendor)}
+                            title="從食材成本排除（例如非食材的服務/雜支廠商）"
+                            style={{ fontSize: 11, padding: '3px 10px', borderRadius: 16, border: '1px solid #fca5a5', background: '#fff', color: '#dc2626', cursor: 'pointer', fontWeight: 600 }}
+                          >
+                            ⊘ 排除
+                          </button>
+                        </td>
                       </tr>
                     )
                   })}
@@ -420,11 +450,30 @@ export default function FoodCostPage() {
                     <td style={tdNum(ratio, revenue > 0 ? '#16a34a' : '#d1d5db', true)}>
                       {revenue > 0 ? `${ratio.toFixed(2)}%` : '—'}
                     </td>
+                    <td />
                   </tr>
                 </tfoot>
               </table>
             )}
           </div>
+
+          {/* 已排除廠商管理 */}
+          {excludedVendors.size > 0 && (
+            <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e8e6e1', padding: '12px 16px', marginBottom: 14, marginTop: -2 }}>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>
+                已排除 <strong style={{ color: '#dc2626' }}>{excludedVendors.size}</strong> 個廠商（不計入食材成本，跨分店共用）：
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {Array.from(excludedVendors).sort().map(v => (
+                  <span key={v} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 4px 3px 10px', borderRadius: 16, background: '#fef2f2', border: '1px solid #fca5a5', fontSize: 12, color: '#374151' }}>
+                    {v}
+                    <button onClick={() => toggleExclude(v)} title="恢復計算"
+                      style={{ marginLeft: 2, border: 'none', background: 'transparent', cursor: 'pointer', color: '#dc2626', fontSize: 14, padding: '0 4px', lineHeight: 1 }}>×</button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* 每日明細 toggle */}
           <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e8e6e1', overflow: 'hidden' }}>
