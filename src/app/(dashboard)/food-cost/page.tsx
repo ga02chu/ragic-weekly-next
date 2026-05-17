@@ -177,7 +177,11 @@ export default function FoodCostPage() {
       return { vendor, begin, purchases, end, usage }
     })
 
-    return onlyActive ? rows.filter(r => r.purchases !== 0 || r.usage !== 0) : rows
+    // onlyActive=true：只藏「四欄全 0」（純粹這分店沒記錄）的廠商。
+    // 有期初／期末庫存（即使沒進貨沒使用）也視為「有資料」要顯示，避免漏掉穩定庫存的廠商
+    return onlyActive
+      ? rows.filter(r => r.begin !== 0 || r.purchases !== 0 || r.end !== 0 || r.usage !== 0)
+      : rows
   }, [data, from, to, storeFilter, excludeStaffMeal, vendorsForStore, onlyActive])
 
   const totals = useMemo(() => {
