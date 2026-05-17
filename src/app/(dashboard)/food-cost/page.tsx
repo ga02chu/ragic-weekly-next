@@ -261,9 +261,11 @@ export default function FoodCostPage() {
   const ratio = revenue > 0 ? (totals.usage / revenue) * 100 : 0
 
   const shiftWeek = (delta: number) => {
+    // 不管目前是否為 partial range，按上/下一週都跳到完整週（週一到週日）
     const f = new Date(from + 'T00:00:00')
-    setFrom(toISO(addDays(f, delta * 7)))
-    setTo(toISO(addDays(new Date(to + 'T00:00:00'), delta * 7)))
+    const newMon = addDays(mondayOf(f), delta * 7)
+    setFrom(toISO(newMon))
+    setTo(toISO(addDays(newMon, 6)))
   }
   const setThisWeek = () => {
     const m = mondayOf(new Date())
