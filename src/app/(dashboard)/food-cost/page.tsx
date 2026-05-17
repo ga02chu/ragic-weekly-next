@@ -170,6 +170,8 @@ export default function FoodCostPage() {
 
     const prevDay = addDays(new Date(from + 'T00:00:00'), -1)
     const prevDayISO = toISO(prevDay)
+    // 期末給 3 天 grace 期：若該廠商 to 當日沒盤點，往後找 1-3 天的盤點（隔週週一才盤的情況）
+    const toPlus3 = toISO(addDays(new Date(to + 'T00:00:00'), 3))
 
     // 「幽靈廠商」過濾：到參考日為止，距離最近一筆盤點或進貨超過 60 天 → 視為休眠
     const STALE_DAYS = 60
@@ -184,7 +186,7 @@ export default function FoodCostPage() {
       .map(vendor => {
         const begin = latestInventoryBefore(invFiltered, prevDayISO, vendor, storeFilter)
         const purchases = inRange.filter(p => p.vendor === vendor).reduce((s, p) => s + p.amount, 0)
-        const end = latestInventoryBefore(invFiltered, to, vendor, storeFilter)
+        const end = latestInventoryBefore(invFiltered, toPlus3, vendor, storeFilter)
         const usage = begin + purchases - end
         return { vendor, begin, purchases, end, usage }
       })
