@@ -86,6 +86,7 @@ export default function FoodCostPage() {
   const [error, setError] = useState('')
   const [showDaily, setShowDaily] = useState(false)
   const [excludeStaffMeal, setExcludeStaffMeal] = useState(true)
+  const [onlyActive, setOnlyActive] = useState(true)
 
   // 只在首次掛載抓資料；後續切日期/分店在記憶體裡篩，不再打 API
   useEffect(() => {
@@ -176,8 +177,8 @@ export default function FoodCostPage() {
       return { vendor, begin, purchases, end, usage }
     })
 
-    return rows
-  }, [data, from, to, storeFilter, excludeStaffMeal, vendorsForStore])
+    return onlyActive ? rows.filter(r => r.purchases !== 0 || r.usage !== 0) : rows
+  }, [data, from, to, storeFilter, excludeStaffMeal, vendorsForStore, onlyActive])
 
   const totals = useMemo(() => {
     return tableRows.reduce((acc, r) => ({
@@ -262,6 +263,10 @@ export default function FoodCostPage() {
         <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, cursor: 'pointer', color: '#374151' }}>
           <input type="checkbox" checked={excludeStaffMeal} onChange={e => setExcludeStaffMeal(e.target.checked)} />
           排除員工餐專用單
+        </label>
+        <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, cursor: 'pointer', color: '#374151' }}>
+          <input type="checkbox" checked={onlyActive} onChange={e => setOnlyActive(e.target.checked)} />
+          只顯示本週有活動的廠商
         </label>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
           <span style={{ fontSize: 12, color: '#6b7280' }}>分店</span>
