@@ -6,8 +6,9 @@ import { fetchAllRecords, getFields } from '@/lib/ragic/fetchRecords'
 const BRAND = '#3c2929'
 
 type Row = { date: string; store: string; vendor: string; amount: number }
+type PurchaseRow = Row & { orderNo: string; staffMeal: number; isStaffOnly: boolean }
 type ApiResp = {
-  purchases: Row[]
+  purchases: PurchaseRow[]
   inventory: Row[]
   stores: string[]
   vendors: string[]
@@ -85,6 +86,7 @@ export default function FoodCostPage() {
   const [salesLoading, setSalesLoading] = useState(true)
   const [error, setError] = useState('')
   const [showDaily, setShowDaily] = useState(false)
+  const [excludeStaffMeal, setExcludeStaffMeal] = useState(true)
 
   // 只在首次掛載抓資料；後續切日期/分店在記憶體裡篩，不再打 API
   useEffect(() => {
@@ -136,12 +138,13 @@ export default function FoodCostPage() {
     return total
   }, [salesRecords, from, to, storeFilter])
 
-  // 按 vendor 加總當週進貨；篩 store
+  // 按 vendor 加總當週進貨；篩 store；可選排除員工餐專用單
   const tableRows = useMemo(() => {
     if (!data) return []
     const inRange = data.purchases.filter(p =>
       p.date >= from && p.date <= to &&
-      (storeFilter === '__ALL__' || p.store === storeFilter)
+      (storeFilter === '__ALL__' || p.store === storeFilter) &&
+      (!excludeStaffMeal || !p.isStaffOnly)
     )
     const invFiltered = storeFilter === '__ALL__'
       ? data.inventory
@@ -166,7 +169,7 @@ export default function FoodCostPage() {
       .sort((a, b) => b.usage - a.usage)
 
     return rows
-  }, [data, from, to, storeFilter])
+  }, [data, from, to, storeFilter, excludeStaffMeal])
 
   const totals = useMemo(() => {
     return tableRows.reduce((acc, r) => ({
@@ -189,7 +192,8 @@ export default function FoodCostPage() {
     }
     const inRange = data.purchases.filter(p =>
       p.date >= from && p.date <= to &&
-      (storeFilter === '__ALL__' || p.store === storeFilter)
+      (storeFilter === '__ALL__' || p.store === storeFilter) &&
+      (!excludeStaffMeal || !p.isStaffOnly)
     )
     const vendorMap: Record<string, Record<string, number>> = {}
     inRange.forEach(p => {
@@ -201,6 +205,14 @@ export default function FoodCostPage() {
       total: Object.values(perDay).reduce((s, v) => s + v, 0),
     })).sort((a, b) => b.total - a.total)
     return { days, rows }
+  }, [data, from, to, storeFilter, excludeStaffMeal])
+
+  // 員工餐金額（範圍 + 分店；用於 KPI 顯示）
+  const staffMealAmount = useMemo(() => {
+    if (!data) return 0
+    return data.purchases
+      .filter(p => p.date >= from && p.date <= to && (storeFilter === '__ALL__' || p.store === storeFilter))
+      .reduce((s, p) => s + p.staffMeal, 0)
   }, [data, from, to, storeFilter])
 
   const ratio = revenue > 0 ? (totals.usage / revenue) * 100 : 0
@@ -239,6 +251,10 @@ export default function FoodCostPage() {
           <span style={{ color: '#9ca3af' }}>~</span>
           <input type="date" value={to} onChange={e => setTo(e.target.value)} style={dateStyle} />
         </div>
+        <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, cursor: 'pointer', color: '#374151' }}>
+          <input type="checkbox" checked={excludeStaffMeal} onChange={e => setExcludeStaffMeal(e.target.checked)} />
+          排除員工餐專用單
+        </label>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
           <span style={{ fontSize: 12, color: '#6b7280' }}>分店</span>
           <select value={storeFilter} onChange={e => setStoreFilter(e.target.value)} style={selStyle}>
@@ -249,9 +265,10 @@ export default function FoodCostPage() {
       </div>
 
       {/* KPI */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
         <KpiCard label="本週使用量" value={fmtMoney(totals.usage)} sub={fmtDateRange(from, to)} color={totals.usage < 0 ? '#dc2626' : undefined} />
         <KpiCard label="本週營業額" value={salesLoading ? '載入中...' : fmtMoney(revenue)} sub={storeFilter === '__ALL__' ? '全部分店' : storeFilter} />
+        <KpiCard label="員工餐金額" value={fmtMoney(staffMealAmount)} sub={excludeStaffMeal ? '已排除員工餐專用單' : '已含員工餐'} color="#d97706" />
         <KpiCard
           label="食材成本率"
           value={revenue > 0 && totals.usage > 0 ? `${ratio.toFixed(2)}%` : '—'}

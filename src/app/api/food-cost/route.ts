@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-// Vercel function 最長執行 60 秒（hobby plan 上限）
 export const maxDuration = 60
 
 const FIELDS_PURCHASE = {
@@ -8,12 +7,19 @@ const FIELDS_PURCHASE = {
   store: '採購分店',
   vendor: '廠商名稱',
   amount: '合計金額',
+  orderNo: '進貨單號',
 }
 const FIELDS_INVENTORY = {
   date: '盤點日期',
   store: '倉庫分店',
   vendor: '廠商名稱',
   amount: '合計金額',
+}
+const FIELDS_ITEM = {
+  orderNo: '進貨單號',
+  vendor: '廠商',
+  name: '商品名稱',
+  amount: '本次進貨金額',
 }
 
 interface RagicRow { [k: string]: unknown }
@@ -32,8 +38,6 @@ function toNum(v: unknown): number {
 }
 
 async function fetchRagic(path: string, token: string, limit = 5000) {
-  // subtables=0 → 不回傳商品明細子表，大幅縮小 payload
-  // limit=N → 取最近 N 筆
   const url = `https://ap7.ragic.com/${path}?api&limit=${limit}&subtables=0&APIKey=${token}`
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 25_000)
@@ -58,27 +62,56 @@ export async function GET(request: NextRequest) {
   const token = process.env.RAGIC_TOKEN
   const purchasePath = process.env.RAGIC_PATH_PURCHASES
   const inventoryPath = process.env.RAGIC_PATH_INVENTORY
+  const itemsPath = process.env.RAGIC_PATH_PURCHASE_ITEMS
 
   if (!token || !purchasePath || !inventoryPath) {
     return NextResponse.json({ error: 'Missing RAGIC_TOKEN / RAGIC_PATH_PURCHASES / RAGIC_PATH_INVENTORY' }, { status: 500 })
   }
 
   try {
-    const [purchaseRows, inventoryRows] = await Promise.all([
+    const [purchaseRows, inventoryRows, itemRows] = await Promise.all([
       fetchRagic(purchasePath, token),
       fetchRagic(inventoryPath, token),
+      itemsPath ? fetchRagic(itemsPath, token, 8000) : Promise.resolve([] as RagicRow[]),
     ])
 
     if (!purchaseRows.length && !inventoryRows.length) {
       return NextResponse.json({ error: 'Ragic 端回傳空資料或逾時，請稍後重試' }, { status: 504 })
     }
 
-    const purchases = purchaseRows.map(r => ({
-      date: parseDate(r[FIELDS_PURCHASE.date]),
-      store: String(r[FIELDS_PURCHASE.store] || ''),
-      vendor: String(r[FIELDS_PURCHASE.vendor] || ''),
-      amount: toNum(r[FIELDS_PURCHASE.amount]),
-    })).filter(p => p.date && p.vendor)
+    // 進貨細項：以「進貨單號」為 key，累加員工餐金額
+    const staffMealByOrder: Record<string, number> = {}
+    const totalLineByOrder: Record<string, number> = {}
+    let staffMealTotalAll = 0
+    itemRows.forEach(r => {
+      const orderNo = String(r[FIELDS_ITEM.orderNo] || '')
+      if (!orderNo) return
+      const amt = toNum(r[FIELDS_ITEM.amount])
+      totalLineByOrder[orderNo] = (totalLineByOrder[orderNo] || 0) + amt
+      const name = String(r[FIELDS_ITEM.name] || '')
+      if (name.includes('員工餐')) {
+        staffMealByOrder[orderNo] = (staffMealByOrder[orderNo] || 0) + amt
+        staffMealTotalAll += amt
+      }
+    })
+
+    const purchases = purchaseRows.map(r => {
+      const orderNo = String(r[FIELDS_PURCHASE.orderNo] || '')
+      const total = toNum(r[FIELDS_PURCHASE.amount])
+      const staffMeal = staffMealByOrder[orderNo] || 0
+      const lineTotal = totalLineByOrder[orderNo] || 0
+      // 「整單就是員工餐」判定：員工餐金額 ≥ 該單品項總和的 99%（容錯）
+      const isStaffOnly = staffMeal > 0 && lineTotal > 0 && staffMeal / lineTotal >= 0.99
+      return {
+        date: parseDate(r[FIELDS_PURCHASE.date]),
+        store: String(r[FIELDS_PURCHASE.store] || ''),
+        vendor: String(r[FIELDS_PURCHASE.vendor] || ''),
+        amount: total,
+        orderNo,
+        staffMeal,
+        isStaffOnly,
+      }
+    }).filter(p => p.date && p.vendor)
 
     const inventory = inventoryRows.map(r => ({
       date: parseDate(r[FIELDS_INVENTORY.date]),
@@ -102,7 +135,8 @@ export async function GET(request: NextRequest) {
         ...purchases.map(p => p.vendor),
         ...inventory.map(p => p.vendor),
       ].filter(Boolean))).sort(),
-      counts: { purchases: purchases.length, inventory: inventory.length },
+      counts: { purchases: purchases.length, inventory: inventory.length, items: itemRows.length },
+      staffMealTotalAll,
     })
     res.headers.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=300')
     return res
