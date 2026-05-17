@@ -44,8 +44,37 @@ function fmtDateRange(from: string, to: string) {
   return `${y1} 年 ${m1}/${d1} – ${m2}/${d2}`
 }
 
-// 對 (vendor, store) 找日期 ≤ refDate 的最新盤點 amount。
-// 重點：同一天可能有多筆盤點 record（不同單號／分批盤點），這些都要 sum。
+// 對 (vendor, store) 找 ≤ refDate 的盤點金額。
+//
+// 為什麼複雜：一個 (廠商, 分店) 的盤點常常分多筆 record（不同倉位/分類，例如冷藏 + 冷凍）。
+// 若某天只盤了一部分（其他倉位漏盤）→ 只取「最新一天的記錄」會嚴重低估。
+//
+// 解法：按金額大小排序當作「倉位 rank」（最小=rank0、次小=rank1...）；
+//      每個 rank 獨立找 ≤ refDate 的最新記錄，再加總所有 rank。
+//      這樣 4/5 只盤了「小倉」14,471，「大倉」會 carry forward 3/31 的 59,392。
+function compartmentSum(rows: Row[]): number {
+  if (!rows.length) return 0
+  // 按日期分組；同日內按金額升冪
+  const byDate: Record<string, Row[]> = {}
+  for (const r of rows) (byDate[r.date] ||= []).push(r)
+  for (const d in byDate) byDate[d].sort((a, b) => a.amount - b.amount)
+  const sortedDates = Object.keys(byDate).sort()
+  const maxRank = Math.max(...Object.values(byDate).map(a => a.length))
+  let total = 0
+  for (let rank = 0; rank < maxRank; rank++) {
+    let latestVal = 0
+    let found = false
+    for (const d of sortedDates) {
+      if (byDate[d][rank] !== undefined) {
+        latestVal = byDate[d][rank].amount
+        found = true
+      }
+    }
+    if (found) total += latestVal
+  }
+  return total
+}
+
 function latestInventoryBefore(inv: Row[], refDate: string, vendor: string, store: string): number {
   const filtered = inv.filter(r =>
     r.vendor === vendor &&
@@ -54,21 +83,11 @@ function latestInventoryBefore(inv: Row[], refDate: string, vendor: string, stor
   )
   if (!filtered.length) return 0
   if (store === '__ALL__') {
-    // 每個 store 各取最新「整日」加總
     const byStore: Record<string, Row[]> = {}
     filtered.forEach(r => { (byStore[r.store] ||= []).push(r) })
-    let total = 0
-    for (const rows of Object.values(byStore)) {
-      rows.sort((a, b) => b.date.localeCompare(a.date))
-      const latestDate = rows[0].date
-      total += rows.filter(r => r.date === latestDate).reduce((s, r) => s + r.amount, 0)
-    }
-    return total
+    return Object.values(byStore).reduce((s, rows) => s + compartmentSum(rows), 0)
   }
-  // 單一 store：取最新「整日」所有 record 加總
-  filtered.sort((a, b) => b.date.localeCompare(a.date))
-  const latestDate = filtered[0].date
-  return filtered.filter(r => r.date === latestDate).reduce((s, r) => s + r.amount, 0)
+  return compartmentSum(filtered)
 }
 
 export default function FoodCostPage() {
