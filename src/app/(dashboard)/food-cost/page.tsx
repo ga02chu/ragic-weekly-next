@@ -138,6 +138,14 @@ export default function FoodCostPage() {
   }, [salesRecords, from, to, storeFilter])
 
   // 按 vendor 加總當週進貨；篩 store；可選排除員工餐專用單
+  // 固定的廠商清單（針對當前分店，只跟歷史上有沒有資料有關，不會因週次變動）
+  const vendorsForStore = useMemo(() => {
+    if (!data) return [] as string[]
+    const allP = storeFilter === '__ALL__' ? data.purchases : data.purchases.filter(p => p.store === storeFilter)
+    const allI = storeFilter === '__ALL__' ? data.inventory : data.inventory.filter(i => i.store === storeFilter)
+    return Array.from(new Set([...allP.map(p => p.vendor), ...allI.map(i => i.vendor)].filter(Boolean)))
+  }, [data, storeFilter])
+
   const tableRows = useMemo(() => {
     if (!data) return []
     const inRange = data.purchases.filter(p =>
@@ -152,23 +160,16 @@ export default function FoodCostPage() {
     const prevDay = addDays(new Date(from + 'T00:00:00'), -1)
     const prevDayISO = toISO(prevDay)
 
-    // 所有出現過的 vendor（在範圍內進貨或盤點的）
-    const vendors = new Set<string>()
-    inRange.forEach(p => vendors.add(p.vendor))
-    invFiltered.filter(r => r.date <= to).forEach(r => vendors.add(r.vendor))
-
-    const rows = Array.from(vendors).map(vendor => {
+    const rows = vendorsForStore.map(vendor => {
       const begin = latestInventoryBefore(invFiltered, prevDayISO, vendor, storeFilter)
       const purchases = inRange.filter(p => p.vendor === vendor).reduce((s, p) => s + p.amount, 0)
       const end = latestInventoryBefore(invFiltered, to, vendor, storeFilter)
-      // 期末若就是期初（範圍內無新盤點）→ 視為 0 使用量也不可靠，但仍計算
       const usage = begin + purchases - end
       return { vendor, begin, purchases, end, usage }
-    }).filter(r => r.begin || r.purchases || r.end || r.usage)
-      .sort((a, b) => b.usage - a.usage)
+    }).sort((a, b) => b.purchases - a.purchases || b.usage - a.usage || a.vendor.localeCompare(b.vendor))
 
     return rows
-  }, [data, from, to, storeFilter, excludeStaffMeal])
+  }, [data, from, to, storeFilter, excludeStaffMeal, vendorsForStore])
 
   const totals = useMemo(() => {
     return tableRows.reduce((acc, r) => ({
