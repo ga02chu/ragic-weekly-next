@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ragic 填寫小撇步</title>
+<style>
+  :root {
+    --brand: #3c2929;
+    --brand-light: #6b4f4f;
+    --bg: #faf7f2;
+    --card: #ffffff;
+    --border: #e8e0d6;
+    --text: #2b2421;
+    --muted: #6b6259;
+    --blue: #2563eb;
+    --blue-bg: #dbeafe;
+    --amber: #d97706;
+    --amber-bg: #fef3c7;
+    --green: #16a34a;
+    --green-bg: #dcfce7;
+    --red: #dc2626;
+    --red-bg: #fee2e2;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Microsoft JhengHei", "Helvetica Neue", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.85;
+    padding: 40px 20px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .container { max-width: 760px; margin: 0 auto; }
+
+  .hero {
+    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-light) 100%);
+    color: #fff;
+    border-radius: 18px;
+    padding: 32px 28px;
+    margin-bottom: 22px;
+    box-shadow: 0 4px 20px rgba(60, 41, 41, 0.12);
+    text-align: center;
+  }
+  .hero-emoji { font-size: 38px; margin-bottom: 8px; }
+  .hero h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+  .hero p { font-size: 14px; opacity: 0.95; max-width: 540px; margin: 0 auto; }
+
+  .intro {
+    background: var(--card);
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    padding: 22px 26px;
+    margin-bottom: 18px;
+    font-size: 14.5px;
+  }
+  .intro p { margin-bottom: 6px; }
+  .intro strong { color: var(--brand); }
+
+  .rule {
+    background: var(--card);
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    padding: 24px 26px;
+    margin-bottom: 16px;
+  }
+  .rule-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .rule-emoji {
+    background: #f7f1e9;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    flex-shrink: 0;
+  }
+  .rule-title-wrap { flex: 1; }
+  .rule-num { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  .rule-title { font-size: 17px; font-weight: 700; color: var(--brand); }
+
+  .big-rule {
+    background: var(--blue-bg);
+    border-left: 4px solid var(--blue);
+    padding: 14px 18px;
+    border-radius: 0 10px 10px 0;
+    margin-bottom: 14px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #1e40af;
+  }
+
+  .story {
+    background: #fdfaf5;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-size: 13.5px;
+  }
+  .story-label {
+    display: inline-block;
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    background: var(--amber-bg);
+    color: var(--amber);
+    font-weight: 700;
+    margin-bottom: 10px;
+  }
+  .story p { margin-bottom: 8px; line-height: 1.85; }
+  .story .what-happened { color: var(--red); font-weight: 600; }
+  .story .right-way { color: var(--green); font-weight: 600; }
+
+  .yes-no {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 12px;
+  }
+  .yes-no .box {
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 13px;
+  }
+  .yes-no .yes {
+    background: var(--green-bg);
+    border: 1px solid var(--green);
+  }
+  .yes-no .no {
+    background: var(--red-bg);
+    border: 1px solid var(--red);
+  }
+  .yes-no .icon { font-size: 18px; margin-bottom: 4px; }
+  .yes-no .yes .icon::before { content: "⭕"; }
+  .yes-no .no .icon::before { content: "❌"; }
+
+  .checklist {
+    background: var(--card);
+    border-radius: 14px;
+    border: 2px dashed var(--brand);
+    padding: 24px 26px;
+    margin-top: 24px;
+  }
+  .checklist h2 {
+    font-size: 18px;
+    color: var(--brand);
+    font-weight: 700;
+    margin-bottom: 14px;
+    text-align: center;
+  }
+  .checklist ul { list-style: none; padding: 0; }
+  .checklist li {
+    font-size: 15px;
+    padding: 10px 0 10px 32px;
+    position: relative;
+    border-bottom: 1px dashed #e8e0d6;
+  }
+  .checklist li:last-child { border-bottom: none; }
+  .checklist li::before {
+    content: "☐";
+    position: absolute;
+    left: 4px;
+    top: 8px;
+    color: var(--brand);
+    font-size: 18px;
+    font-weight: 700;
+  }
+
+  .closing {
+    margin-top: 24px;
+    padding: 20px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .closing .heart { color: var(--red); font-size: 16px; }
+
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 20px; }
+    .yes-no { grid-template-columns: 1fr; }
+    .rule, .intro, .checklist { padding: 18px 20px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="hero">
+    <div class="hero-emoji">📝</div>
+    <h1>Ragic 填寫小撇步</h1>
+    <p>5 個常見的小錯誤，避開了主管看到的數字就會對！</p>
+  </div>
+
+  <div class="intro">
+    <p>嗨，各位夥伴 👋</p>
+    <p>最近我們有發現<strong>營運分析表</strong>上跟 <strong>Ragic 跑出來</strong>的數字不一樣的地方，主要是以下 <strong>5 個原因</strong>造成的差異。</p>
+    <p>請各位夥伴確保自己填寫正確，謝謝大家 🙏</p>
+  </div>
+
+  <!-- 規則 1 -->
+  <div class="rule">
+    <div class="rule-header">
+      <span class="rule-emoji">📅</span>
+      <div class="rule-title-wrap">
+        <div class="rule-num">第 1 條</div>
+        <div class="rule-title">「進貨日期」= 貨真正到的那天</div>
+      </div>
+    </div>
+
+    <div class="big-rule">
+      貨幾號到，就填幾號 👉 不是訂貨那天，也不是發票那天。
+    </div>
+
+    <div class="story">
+      <span class="story-label">真實案例</span>
+      <p>4/30 訂的韓英食材 <strong>5/1 才送到</strong>，但有人填成 4/29。</p>
+      <p class="what-happened">→ 結果系統把這筆 3,948 元算到「上一週」，主管看了問「韓英這週怎麼沒進貨？」</p>
+      <p class="right-way">→ 正確：填 5/1（送到那天）</p>
+    </div>
+  </div>
+
+  <!-- 規則 2 -->
+  <div class="rule">
+    <div class="rule-header">
+      <span class="rule-emoji">🍱</span>
+      <div class="rule-title-wrap">
+        <div class="rule-num">第 2 條</div>
+        <div class="rule-title">員工餐請「另外開一張單」</div>
+      </div>
+    </div>
+
+    <div class="big-rule">
+      員工自己要吃的菜 👉 開一張單，整單都只有員工餐。<br>
+      客人要吃的菜 👉 另開一張。
+    </div>
+
+    <div class="yes-no">
+      <div class="box yes">
+        <div class="icon"></div>
+        <strong>對</strong><br>
+        ①號單：員工餐 800 元<br>
+        ②號單：白蘿蔔、洋蔥、青蔥 共 1,200 元
+      </div>
+      <div class="box no">
+        <div class="icon"></div>
+        <strong>錯</strong><br>
+        一張單：員工餐 + 白蘿蔔 + 洋蔥 + 青蔥
+      </div>
+    </div>
+
+    <div class="story" style="margin-top:14px">
+      <span class="story-label">⚠️ 特別提醒</span>
+      <p>即使白蘿蔔是<strong>給客人用的食材</strong>、跟員工餐<strong>一起跟廠商叫的</strong>——還是要請廠商<strong>分開打單</strong>（一張單員工餐、一張單給客人的菜）。<br>不要因為「順便叫」就合在同一張，不然就會混進員工餐欄目。</p>
+    </div>
+
+    <div class="story" style="margin-top:10px">
+      <span class="story-label">為什麼</span>
+      <p>混在一起填，系統<strong>分不出來</strong>哪些是員工餐、哪些是給客人的，主管的「食材成本率」就會算錯。</p>
+    </div>
+  </div>
+
+  <!-- 規則 3 -->
+  <div class="rule">
+    <div class="rule-header">
+      <span class="rule-emoji">📦</span>
+      <div class="rule-title-wrap">
+        <div class="rule-num">第 3 條</div>
+        <div class="rule-title">盤點要「全部都盤」，一個區都不能漏</div>
+      </div>
+    </div>
+
+    <div class="big-rule">
+      冷藏、冷凍、乾貨櫃、調味料區 👉 每個區都要盤到。
+    </div>
+
+    <div class="story">
+      <span class="story-label">真實案例</span>
+      <p>4/5 盤點時，韓廣的「冷凍庫」忘了盤，只盤了「乾貨架」14,471 元。</p>
+      <p class="what-happened">→ 結果這週「使用量」變成 -29,000 元（負的！），主管看了一頭霧水。</p>
+      <p class="right-way">→ 正確：盤之前先列「待盤區域 checklist」，每盤完一區打勾。</p>
+    </div>
+
+    <p style="margin-top:12px;font-size:13px;color:var(--muted);">
+      💡 小撇步：每週盤點筆數應該<strong>差不多多</strong>，如果這次比上次少很多，八成有東西沒盤。
+    </p>
+  </div>
+
+  <!-- 規則 4 -->
+  <div class="rule">
+    <div class="rule-header">
+      <span class="rule-emoji">✏️</span>
+      <div class="rule-title-wrap">
+        <div class="rule-num">第 4 條</div>
+        <div class="rule-title">員工餐就寫「員工餐」三個字</div>
+      </div>
+    </div>
+
+    <div class="big-rule">
+      商品名稱：<strong>員工餐</strong>（兩個字，沒有別的）。
+    </div>
+
+    <div class="yes-no">
+      <div class="box yes">
+        <div class="icon"></div>
+        <strong>對</strong><br>
+        員工餐
+      </div>
+      <div class="box no">
+        <div class="icon"></div>
+        <strong>錯</strong><br>
+        員工伙食 / 夥伴餐 / 員工便當<br>
+        員工餐(週一) / 員工午餐
+      </div>
+    </div>
+
+    <div class="story" style="margin-top:14px">
+      <span class="story-label">為什麼</span>
+      <p>系統就是看「員工餐」這三個字才認得出來，多打字或改字系統就<strong>當一般食材算</strong>。</p>
+    </div>
+  </div>
+
+  <!-- 規則 5 -->
+  <div class="rule">
+    <div class="rule-header">
+      <span class="rule-emoji">💰</span>
+      <div class="rule-title-wrap">
+        <div class="rule-num">第 5 條</div>
+        <div class="rule-title">營業額填完，跟 POS 結算機對一次</div>
+      </div>
+    </div>
+
+    <div class="big-rule">
+      存檔前 👉 看一眼 POS 結算單，數字對得起來再按存檔。
+    </div>
+
+    <div class="story">
+      <span class="story-label">真實案例</span>
+      <p>5/5 那天 Ragic 上的營業額是 20,699，但 Google Sheet 上填了 <strong>20,789</strong>（多打了 90 元）。</p>
+      <p class="what-happened">→ 主管看到兩邊差 90 元，又開始懷疑「是不是整份報表都不對？」</p>
+      <p class="right-way">→ 正確：按存檔前手指比一下 POS 那張結算單，確認數字一樣。</p>
+    </div>
+  </div>
+
+  <!-- Checklist -->
+  <div class="checklist">
+    <h2>🎯 填單前 6 點檢查</h2>
+    <ul>
+      <li>「進貨日期」是 <strong>貨真正到的那天</strong> 嗎？</li>
+      <li>員工餐是<strong>另外開一張單</strong>嗎？</li>
+      <li>商品名稱就寫 <strong>員工餐</strong> 兩個字嗎？</li>
+      <li>盤點時 <strong>所有區域</strong> 都盤過了嗎？</li>
+      <li>營業額跟 <strong>POS 結算單</strong> 對過了嗎？</li>
+      <li>有不確定的 → <strong>直接問主管或秘書，不要猜</strong></li>
+    </ul>
+  </div>
+
+  <div class="closing">
+    <p>大家填得越仔細，主管就越不會找我們麻煩 😆</p>
+    <p>謝謝大家 <span class="heart">♥</span></p>
+  </div>
+
+</div>
+</body>
+</html>

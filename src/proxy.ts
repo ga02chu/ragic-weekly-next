@@ -4,8 +4,8 @@ import { NextResponse, type NextRequest } from 'next/server'
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  // 不擋 /login 頁面與 /api/login（讓人能進去輸密碼）
-  if (pathname === '/login' || pathname.startsWith('/api/login')) {
+  // 不擋 /login、/api/login（讓人能進去輸密碼），以及 /guide（公開規範頁）
+  if (pathname === '/login' || pathname.startsWith('/api/login') || pathname.startsWith('/guide')) {
     return NextResponse.next()
   }
 
