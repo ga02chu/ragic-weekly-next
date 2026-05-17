@@ -43,7 +43,8 @@ function fmtDateRange(from: string, to: string) {
   return `${y1} 年 ${m1}/${d1} – ${m2}/${d2}`
 }
 
-// 對 (vendor, store) 找日期 ≤ refDate 的最新 amount；store='__ALL__' 表示加總所有分店
+// 對 (vendor, store) 找日期 ≤ refDate 的最新盤點 amount。
+// 重點：同一天可能有多筆盤點 record（不同單號／分批盤點），這些都要 sum。
 function latestInventoryBefore(inv: Row[], refDate: string, vendor: string, store: string): number {
   const filtered = inv.filter(r =>
     r.vendor === vendor &&
@@ -52,16 +53,21 @@ function latestInventoryBefore(inv: Row[], refDate: string, vendor: string, stor
   )
   if (!filtered.length) return 0
   if (store === '__ALL__') {
-    // 每個 store 的最新一筆相加
-    const byStore: Record<string, Row> = {}
-    filtered.forEach(r => {
-      if (!byStore[r.store] || byStore[r.store].date < r.date) byStore[r.store] = r
-    })
-    return Object.values(byStore).reduce((s, r) => s + r.amount, 0)
+    // 每個 store 各取最新「整日」加總
+    const byStore: Record<string, Row[]> = {}
+    filtered.forEach(r => { (byStore[r.store] ||= []).push(r) })
+    let total = 0
+    for (const rows of Object.values(byStore)) {
+      rows.sort((a, b) => b.date.localeCompare(a.date))
+      const latestDate = rows[0].date
+      total += rows.filter(r => r.date === latestDate).reduce((s, r) => s + r.amount, 0)
+    }
+    return total
   }
-  // 單一 store 的最新
+  // 單一 store：取最新「整日」所有 record 加總
   filtered.sort((a, b) => b.date.localeCompare(a.date))
-  return filtered[0].amount
+  const latestDate = filtered[0].date
+  return filtered.filter(r => r.date === latestDate).reduce((s, r) => s + r.amount, 0)
 }
 
 export default function FoodCostPage() {
