@@ -4,6 +4,8 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { fetchAllRecords, getFields } from '@/lib/ragic/fetchRecords'
 
 const BRAND = '#3c2929'
+// 廠商名稱含這些關鍵字 → 永遠不算食材成本（清潔/服務/雜支廠商）
+const ALWAYS_EXCLUDE_KEYWORDS = ['樂清']
 
 type Row = { date: string; store: string; vendor: string; amount: number }
 type PurchaseRow = Row & { orderNo: string; staffMeal: number; isStaffOnly: boolean }
@@ -231,9 +233,11 @@ export default function FoodCostPage() {
     purFiltered.forEach(p => { if (p.date >= cutoff && p.date <= to) recentVendors.add(p.vendor) })
 
     // 順序直接照 vendorsForStore（已按歷史總進貨排好），不再二次排序
+    const isAutoExcluded = (v: string) => ALWAYS_EXCLUDE_KEYWORDS.some(k => v.includes(k))
     const rows = vendorsForStore
       .filter(v => recentVendors.has(v))
       .filter(v => !excludedVendors.has(v))
+      .filter(v => !isAutoExcluded(v))
       .map(vendor => {
         const begin = latestInventoryBefore(invFiltered, from, vendor, storeFilter)
         const purchases = inRange.filter(p => p.vendor === vendor).reduce((s, p) => s + p.amount, 0)
@@ -489,6 +493,23 @@ export default function FoodCostPage() {
               </table>
             )}
           </div>
+
+          {/* 自動排除規則提示 */}
+          {(() => {
+            if (!data) return null
+            const allVendorsSeen = new Set<string>([...data.purchases.map(p => p.vendor), ...data.inventory.map(i => i.vendor)].filter(Boolean))
+            const autoExcluded = Array.from(allVendorsSeen).filter(v => ALWAYS_EXCLUDE_KEYWORDS.some(k => v.includes(k))).sort()
+            if (autoExcluded.length === 0) return null
+            return (
+              <div style={{ background: '#f0fdf4', borderRadius: 10, border: '1px solid #bbf7d0', padding: '10px 14px', marginBottom: 12, marginTop: -2, fontSize: 12, color: '#374151' }}>
+                <span style={{ color: '#16a34a', fontWeight: 600 }}>✓ 自動排除規則啟用中</span>
+                <span style={{ color: '#6b7280', marginLeft: 8 }}>
+                  廠商名稱含「{ALWAYS_EXCLUDE_KEYWORDS.join('」、「')}」永不計入食材成本：
+                </span>
+                <span style={{ marginLeft: 6 }}>{autoExcluded.join('、')}</span>
+              </div>
+            )
+          })()}
 
           {/* 已排除廠商管理 */}
           {excludedVendors.size > 0 && (
