@@ -224,6 +224,23 @@ export default function FoodCostPage() {
       .reduce((s, p) => s + p.staffMeal, 0)
   }, [data, from, to, storeFilter])
 
+  // 員工餐明細：每張包含員工餐的進貨單
+  const staffMealRows = useMemo(() => {
+    if (!data) return [] as { date: string; orderNo: string; vendor: string; staffMeal: number; total: number; isStaffOnly: boolean }[]
+    return data.purchases
+      .filter(p =>
+        p.date >= from && p.date <= to &&
+        (storeFilter === '__ALL__' || p.store === storeFilter) &&
+        p.staffMeal > 0
+      )
+      .map(p => ({
+        date: p.date, orderNo: p.orderNo, vendor: p.vendor,
+        staffMeal: p.staffMeal, total: p.amount, isStaffOnly: p.isStaffOnly,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date) || a.orderNo.localeCompare(b.orderNo))
+  }, [data, from, to, storeFilter])
+  const [showStaffMeal, setShowStaffMeal] = useState(false)
+
   const ratio = revenue > 0 ? (totals.usage / revenue) * 100 : 0
 
   const shiftWeek = (delta: number) => {
@@ -256,9 +273,32 @@ export default function FoodCostPage() {
         <button onClick={setLastWeek} style={btnStyle()}>上週</button>
         <button onClick={() => shiftWeek(1)} style={btnStyle()}>下一週 →</button>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 8 }}>
-          <input type="date" value={from} onChange={e => setFrom(e.target.value)} style={dateStyle} />
+          <input
+            type="date"
+            value={from}
+            onChange={e => {
+              // 自動 snap：選到任何日期都對齊到該週週一-週日
+              const picked = new Date(e.target.value + 'T00:00:00')
+              if (isNaN(picked.getTime())) return
+              const m = mondayOf(picked)
+              setFrom(toISO(m))
+              setTo(toISO(addDays(m, 6)))
+            }}
+            style={dateStyle}
+          />
           <span style={{ color: '#9ca3af' }}>~</span>
-          <input type="date" value={to} onChange={e => setTo(e.target.value)} style={dateStyle} />
+          <input
+            type="date"
+            value={to}
+            onChange={e => {
+              const picked = new Date(e.target.value + 'T00:00:00')
+              if (isNaN(picked.getTime())) return
+              const m = mondayOf(picked)
+              setFrom(toISO(m))
+              setTo(toISO(addDays(m, 6)))
+            }}
+            style={dateStyle}
+          />
         </div>
         <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, cursor: 'pointer', color: '#374151' }}>
           <input type="checkbox" checked={excludeStaffMeal} onChange={e => setExcludeStaffMeal(e.target.checked)} />
@@ -404,6 +444,58 @@ export default function FoodCostPage() {
                         </tr>
                       ))}
                     </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 員工餐明細 toggle */}
+          <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e8e6e1', overflow: 'hidden', marginTop: 14 }}>
+            <button
+              onClick={() => setShowStaffMeal(s => !s)}
+              style={{ width: '100%', padding: '12px 16px', background: '#fff', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#1a2f4e', textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>員工餐明細 <span style={{ color: '#d97706', fontSize: 12, marginLeft: 6 }}>共 {staffMealRows.length} 張單 · ${fmtMoney(staffMealAmount)}</span></span>
+              <span style={{ color: '#9ca3af', fontSize: 12 }}>{showStaffMeal ? '收起 ▲' : '展開 ▼'}</span>
+            </button>
+            {showStaffMeal && (
+              <div style={{ borderTop: '1px solid #f0eee9', overflowX: 'auto' }}>
+                {staffMealRows.length === 0 ? (
+                  <div style={{ padding: 30, textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>此區間沒有員工餐進貨</div>
+                ) : (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: '#fafaf8' }}>
+                        {['日期', '進貨單號', '廠商', '類型', '員工餐金額', '整單金額'].map((h, i) => (
+                          <th key={h} style={{ padding: '9px 12px', textAlign: i >= 4 ? 'right' : 'left', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1', whiteSpace: 'nowrap' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {staffMealRows.map((r, i) => (
+                        <tr key={`${r.orderNo}-${i}`} style={{ borderBottom: '1px solid #f0eee9' }}>
+                          <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', color: '#374151' }}>{r.date}</td>
+                          <td style={{ padding: '8px 12px', fontFamily: 'ui-monospace, monospace', fontSize: 12, color: '#6b7280' }}>{r.orderNo}</td>
+                          <td style={{ padding: '8px 12px' }}>{r.vendor}</td>
+                          <td style={{ padding: '8px 12px' }}>
+                            {r.isStaffOnly ? (
+                              <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: '#fef3c7', color: '#d97706', fontWeight: 600 }}>整單員工餐</span>
+                            ) : (
+                              <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: '#dbeafe', color: '#2563eb', fontWeight: 600 }}>混合單</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: '#d97706' }}>{fmtMoney(r.staffMeal)}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', color: '#6b7280' }}>{fmtMoney(r.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ background: '#fef3c7', fontWeight: 700 }}>
+                        <td style={{ padding: '10px 12px' }} colSpan={4}>合計</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', color: '#d97706' }}>{fmtMoney(staffMealAmount)}</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', color: '#6b7280' }}>{fmtMoney(staffMealRows.reduce((s, r) => s + r.total, 0))}</td>
+                      </tr>
+                    </tfoot>
                   </table>
                 )}
               </div>
