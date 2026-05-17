@@ -115,7 +115,7 @@ export default function DashboardPage() {
     }).catch(() => { /* ignore */ })
   }, [])
 
-  // 讀 HR 計算 snapshot（/hr 頁計算完會存）+ 按日攤算到當前期間
+  // 讀 HR 計算 snapshot（/hr 頁計算完會存）
   type HRSnapshot = {
     calcAt: number; year: number; month: number; viewMode: string; dateFrom: string; dateTo: string
     totalCost: number
@@ -128,37 +128,6 @@ export default function DashboardPage() {
       if (raw) setHrSnapshot(JSON.parse(raw))
     } catch { /* ignore */ }
   }, [])
-
-  // 計算 HR 資料期間 + 與當前 dateFrom-dateTo 的重疊天數
-  const hrProration = useMemo(() => {
-    if (!hrSnapshot) return null
-    // 推算 HR 資料的有效期間
-    let hrFrom: string, hrTo: string
-    if (hrSnapshot.viewMode === 'month') {
-      const lastDay = new Date(hrSnapshot.year, hrSnapshot.month, 0).getDate()
-      const pad = (n: number) => String(n).padStart(2, '0')
-      hrFrom = `${hrSnapshot.year}-${pad(hrSnapshot.month)}-01`
-      hrTo = `${hrSnapshot.year}-${pad(hrSnapshot.month)}-${pad(lastDay)}`
-    } else {
-      hrFrom = hrSnapshot.dateFrom
-      hrTo = hrSnapshot.dateTo
-    }
-    const daysBetween = (a: string, b: string) => {
-      const ms = new Date(b + 'T00:00:00').getTime() - new Date(a + 'T00:00:00').getTime()
-      return Math.floor(ms / 86400000) + 1
-    }
-    const hrDays = daysBetween(hrFrom, hrTo)
-    // 重疊
-    const overlapFrom = dateFrom > hrFrom ? dateFrom : hrFrom
-    const overlapTo = dateTo < hrTo ? dateTo : hrTo
-    const overlapDays = overlapFrom <= overlapTo ? daysBetween(overlapFrom, overlapTo) : 0
-    const ratio = hrDays > 0 ? overlapDays / hrDays : 0
-    return { hrFrom, hrTo, hrDays, overlapFrom, overlapTo, overlapDays, ratio }
-  }, [hrSnapshot, dateFrom, dateTo])
-
-  // 攤算後的整體 HR 成本（依重疊天數）
-  const hrCostProrated = hrSnapshot && hrProration ? hrSnapshot.totalCost * hrProration.ratio : 0
-  const hrRatioOverall = totalRev > 0 && hrCostProrated > 0 ? (hrCostProrated / totalRev) * 100 : 0
 
   const mounted = useRef(false)
 
@@ -451,40 +420,35 @@ export default function DashboardPage() {
 
               {/* 人事成本 */}
               <a href="/hr" style={{
-                background: hrSnapshot && hrProration && hrProration.overlapDays > 0 && totalRev > 0
-                  ? (hrRatioOverall > 35 ? '#fee2e2' : hrRatioOverall > 30 ? '#fef3c7' : '#dcfce7')
+                background: hrSnapshot && totalRev > 0
+                  ? ((hrSnapshot.totalCost / totalRev * 100) > 35 ? '#fee2e2' : (hrSnapshot.totalCost / totalRev * 100) > 30 ? '#fef3c7' : '#dcfce7')
                   : '#fff',
                 borderRadius: 12, padding: '16px 20px',
-                border: `1px solid ${hrSnapshot && hrProration && hrProration.overlapDays > 0 && totalRev > 0 ? (hrRatioOverall > 35 ? '#fca5a5' : hrRatioOverall > 30 ? '#fbbf24' : '#86efac') : '#e8e6e1'}`,
+                border: `1px solid ${hrSnapshot && totalRev > 0 ? ((hrSnapshot.totalCost / totalRev * 100) > 35 ? '#fca5a5' : (hrSnapshot.totalCost / totalRev * 100) > 30 ? '#fbbf24' : '#86efac') : '#e8e6e1'}`,
                 textDecoration: 'none', display: 'block',
               }}>
                 <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, display: 'flex', justifyContent: 'space-between' }}>
-                  <span>人事成本（按日攤算）</span>
+                  <span>人事成本</span>
                   <span style={{ color: BRAND }}>→</span>
                 </div>
-                {hrSnapshot && hrProration ? (
-                  hrProration.overlapDays > 0 ? (
-                    <>
-                      <div style={{ fontSize: 24, fontWeight: 700, color: '#1a2f4e' }}>
-                        ${fmt(Math.round(hrCostProrated))}
-                      </div>
-                      <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
-                        成本率 {totalRev > 0 ? hrRatioOverall.toFixed(2) + '%' : '—'}
-                        {' · '}
-                        {hrProration.overlapDays}/{hrProration.hrDays} 天
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div style={{ fontSize: 16, fontWeight: 700, color: '#9ca3af' }}>本期間外</div>
-                      <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
-                        HR 資料：{hrProration.hrFrom} ~ {hrProration.hrTo}
-                      </div>
-                    </>
-                  )
+                {hrSnapshot ? (
+                  <>
+                    <div style={{ fontSize: 24, fontWeight: 700, color: '#1a2f4e' }}>
+                      ${fmt(hrSnapshot.totalCost)}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                      成本率 {totalRev > 0 ? (hrSnapshot.totalCost / totalRev * 100).toFixed(2) + '%' : '—'}
+                      {' · '}
+                      {hrSnapshot.viewMode === 'week'
+                        ? `期間 ${hrSnapshot.dateFrom} ~ ${hrSnapshot.dateTo}`
+                        : `${hrSnapshot.year}/${hrSnapshot.month}`}
+                    </div>
+                  </>
                 ) : (
                   <>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: '#9ca3af' }}>未計算</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: '#9ca3af' }}>
+                      未計算
+                    </div>
                     <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
                       點此前往 HR 頁面上傳檔案計算
                     </div>
@@ -549,9 +513,9 @@ export default function DashboardPage() {
                       }
                       const foodRatio = s.rev > 0 ? foodUsage / s.rev * 100 : 0
 
-                      // 該分店人事成本（按日攤算）
+                      // 該分店人事成本
                       const hrStore = hrSnapshot?.byStore.find(b => b.cat === sName || sName.includes(b.cat) || b.cat.includes(sName))
-                      const hrCost = hrStore && hrProration ? Math.round((hrStore.totalCost || 0) * hrProration.ratio) : 0
+                      const hrCost = hrStore?.totalCost || 0
                       const hrRatio = s.rev > 0 ? hrCost / s.rev * 100 : 0
                       const totalCostRatio = foodRatio + hrRatio
 
@@ -580,13 +544,9 @@ export default function DashboardPage() {
                     })}
                   </tbody>
                 </table>
-                {!hrSnapshot ? (
+                {!hrSnapshot && (
                   <div style={{ padding: '8px 16px', fontSize: 11, color: '#9ca3af', background: '#fafaf8', borderTop: '1px solid #f0eee9' }}>
                     ⚠️ 人事成本欄位需要先到 <a href="/hr" style={{ color: BRAND, fontWeight: 600 }}>HR 頁面</a> 上傳檔案計算過才會顯示
-                  </div>
-                ) : hrProration && (
-                  <div style={{ padding: '8px 16px', fontSize: 11, color: '#6b7280', background: '#fafaf8', borderTop: '1px solid #f0eee9' }}>
-                    💡 人事成本按日攤算：HR 資料期間 <strong>{hrProration.hrFrom} ~ {hrProration.hrTo}</strong>（{hrProration.hrDays} 天）→ 取重疊 <strong>{hrProration.overlapDays} 天</strong> 比例 <strong>{(hrProration.ratio * 100).toFixed(1)}%</strong> 計算。要更新請去 <a href="/hr" style={{ color: BRAND, fontWeight: 600 }}>HR 頁面</a> 重算
                   </div>
                 )}
               </div>
