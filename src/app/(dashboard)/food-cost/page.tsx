@@ -514,9 +514,11 @@ function tdNum(_n: number, color: string, bold = false): React.CSSProperties {
   return { padding: '9px 14px', textAlign: 'right', color, fontWeight: bold ? 600 : 400, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }
 }
 
-// 週一開頭的週選擇器（替代 input[type=date]）
+// 週/自訂 雙模式日期選擇器（週一開頭）
 function WeekPicker({ from, to, onChange }: { from: string; to: string; onChange: (f: string, t: string) => void }) {
   const [open, setOpen] = useState(false)
+  const [mode, setMode] = useState<'week' | 'range'>('week')
+  const [pending, setPending] = useState<string | null>(null) // 自訂模式：第一次點的日期
   const [view, setView] = useState(() => {
     const d = new Date(from + 'T00:00:00')
     return new Date(d.getFullYear(), d.getMonth(), 1)
@@ -526,7 +528,9 @@ function WeekPicker({ from, to, onChange }: { from: string; to: string; onChange
   useEffect(() => {
     if (!open) return
     const onClick = (e: MouseEvent) => {
-      if (popRef.current && !popRef.current.contains(e.target as Node)) setOpen(false)
+      if (popRef.current && !popRef.current.contains(e.target as Node)) {
+        setOpen(false); setPending(null)
+      }
     }
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
@@ -540,10 +544,9 @@ function WeekPicker({ from, to, onChange }: { from: string; to: string; onChange
   }
   const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 
-  // 產生月曆 grid（週一開頭）
   const grid = useMemo(() => {
     const firstOfMonth = new Date(view.getFullYear(), view.getMonth(), 1)
-    const start = monday(firstOfMonth) // 該月第一天所在週的週一
+    const start = monday(firstOfMonth)
     const cells: Date[] = []
     for (let i = 0; i < 42; i++) {
       const d = new Date(start); d.setDate(start.getDate() + i)
@@ -554,18 +557,42 @@ function WeekPicker({ from, to, onChange }: { from: string; to: string; onChange
 
   const fromD = new Date(from + 'T00:00:00')
   const toD = new Date(to + 'T00:00:00')
-  const inSelectedWeek = (d: Date) => d >= fromD && d <= toD
+  const inSelectedRange = (d: Date) => d >= fromD && d <= toD
+  const isPending = (d: Date) => pending !== null && iso(d) === pending
   const isToday = (d: Date) => {
     const t = new Date(); t.setHours(0,0,0,0)
     return d.getTime() === t.getTime()
   }
 
   const handlePick = (d: Date) => {
-    const m = monday(d)
-    const sun = new Date(m); sun.setDate(m.getDate() + 6)
-    onChange(iso(m), iso(sun))
-    setOpen(false)
+    if (mode === 'week') {
+      const m = monday(d)
+      const sun = new Date(m); sun.setDate(m.getDate() + 6)
+      onChange(iso(m), iso(sun))
+      setOpen(false)
+      setPending(null)
+    } else {
+      // 自訂模式：第一次點 → 紀錄為 pending；第二次點 → 完成區間
+      if (pending === null) {
+        setPending(iso(d))
+      } else {
+        const a = new Date(pending + 'T00:00:00')
+        const lo = a < d ? a : d
+        const hi = a < d ? d : a
+        onChange(iso(lo), iso(hi))
+        setOpen(false)
+        setPending(null)
+      }
+    }
   }
+
+  const tabStyle = (active: boolean): React.CSSProperties => ({
+    flex: 1, padding: '5px 0', fontSize: 11, fontWeight: 600,
+    background: active ? BRAND : '#fff',
+    color: active ? '#fff' : '#6b7280',
+    border: '1px solid ' + (active ? BRAND : '#e5e7eb'),
+    cursor: 'pointer',
+  })
 
   return (
     <div style={{ position: 'relative', marginLeft: 4 }} ref={popRef}>
@@ -585,8 +612,20 @@ function WeekPicker({ from, to, onChange }: { from: string; to: string; onChange
           background: '#fff', borderRadius: 10, border: '1px solid #e5e7eb',
           boxShadow: '0 8px 24px rgba(0,0,0,0.12)', padding: 14, width: 290,
         }}>
-          {/* 月份切換列 */}
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
+          {/* 模式切換 */}
+          <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', marginBottom: 10 }}>
+            <button type="button" onClick={() => { setMode('week'); setPending(null) }}
+              style={{ ...tabStyle(mode === 'week'), borderTopLeftRadius: 6, borderBottomLeftRadius: 6, borderRight: 'none' }}>
+              週
+            </button>
+            <button type="button" onClick={() => { setMode('range'); setPending(null) }}
+              style={{ ...tabStyle(mode === 'range'), borderTopRightRadius: 6, borderBottomRightRadius: 6 }}>
+              自訂區間
+            </button>
+          </div>
+
+          {/* 月份切換 */}
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
             <button onClick={() => setView(new Date(view.getFullYear(), view.getMonth() - 1, 1))}
               style={{ border: 'none', background: 'transparent', fontSize: 16, cursor: 'pointer', padding: '4px 8px' }}>‹</button>
             <span style={{ flex: 1, textAlign: 'center', fontWeight: 700, color: BRAND }}>
@@ -596,7 +635,7 @@ function WeekPicker({ from, to, onChange }: { from: string; to: string; onChange
               style={{ border: 'none', background: 'transparent', fontSize: 16, cursor: 'pointer', padding: '4px 8px' }}>›</button>
           </div>
 
-          {/* 週標題（週一開頭！） */}
+          {/* 週標題（週一開頭） */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, marginBottom: 4 }}>
             {['一','二','三','四','五','六','日'].map(d => (
               <div key={d} style={{ textAlign: 'center', fontSize: 11, color: '#9ca3af', padding: '4px 0', fontWeight: 600 }}>{d}</div>
@@ -607,19 +646,20 @@ function WeekPicker({ from, to, onChange }: { from: string; to: string; onChange
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
             {grid.map((d, i) => {
               const sameMonth = d.getMonth() === view.getMonth()
-              const sel = inSelectedWeek(d)
+              const sel = mode === 'week' ? inSelectedRange(d) : inSelectedRange(d)
+              const isP = isPending(d)
               const today = isToday(d)
               return (
                 <button key={i} onClick={() => handlePick(d)}
                   style={{
                     aspectRatio: '1', border: today ? `1.5px solid ${BRAND}` : '1px solid transparent',
                     borderRadius: 6, cursor: 'pointer', fontSize: 12,
-                    background: sel ? BRAND : 'transparent',
-                    color: sel ? '#fff' : sameMonth ? '#374151' : '#d1d5db',
-                    fontWeight: sel ? 700 : 400,
+                    background: isP ? '#fef3c7' : sel ? BRAND : 'transparent',
+                    color: isP ? '#d97706' : sel ? '#fff' : sameMonth ? '#374151' : '#d1d5db',
+                    fontWeight: (sel || isP) ? 700 : 400,
                   }}
-                  onMouseEnter={e => { if (!sel) e.currentTarget.style.background = '#f3f0ea' }}
-                  onMouseLeave={e => { if (!sel) e.currentTarget.style.background = 'transparent' }}
+                  onMouseEnter={e => { if (!sel && !isP) e.currentTarget.style.background = '#f3f0ea' }}
+                  onMouseLeave={e => { if (!sel && !isP) e.currentTarget.style.background = 'transparent' }}
                 >
                   {d.getDate()}
                 </button>
@@ -628,7 +668,11 @@ function WeekPicker({ from, to, onChange }: { from: string; to: string; onChange
           </div>
 
           <div style={{ marginTop: 10, fontSize: 11, color: '#9ca3af', textAlign: 'center' }}>
-            點任何一天 → 自動選整週（週一-週日）
+            {mode === 'week'
+              ? '點任何一天 → 自動選整週（週一-週日）'
+              : pending === null
+                ? '點第一天 = 起日'
+                : `已選起日 ${pending}，再點一天 = 迄日`}
           </div>
         </div>
       )}
