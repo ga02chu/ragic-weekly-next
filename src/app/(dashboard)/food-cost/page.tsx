@@ -337,7 +337,7 @@ export default function FoodCostPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: '#fafaf8' }}>
-                    {['廠商', '期初存貨', '本週進貨', '期末盤點', '本週使用量', '占比'].map((h, i) => (
+                    {['廠商', '期初存貨', '本週進貨', '期末盤點', '本週使用量', '占比', '佔營業額'].map((h, i) => (
                       <th key={h} style={{ padding: '10px 14px', textAlign: i === 0 ? 'left' : 'right', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>
@@ -345,6 +345,7 @@ export default function FoodCostPage() {
                 <tbody>
                   {tableRows.map(r => {
                     const pct = totals.usage > 0 ? (r.usage / totals.usage) * 100 : 0
+                    const revPct = revenue > 0 ? (r.usage / revenue) * 100 : 0
                     return (
                       <tr key={r.vendor} style={{ borderBottom: '1px solid #f0eee9' }}>
                         <td style={{ padding: '9px 14px', fontWeight: 500 }}>
@@ -361,6 +362,9 @@ export default function FoodCostPage() {
                         <td style={tdNum(r.end, '#6b7280')}>{r.end ? fmtMoney(r.end) : '—'}</td>
                         <td style={tdNum(r.usage, r.usage < 0 ? '#dc2626' : '#1a2f4e', true)}>{fmtMoney(r.usage)}</td>
                         <td style={{ ...tdNum(pct, '#9ca3af'), fontSize: 12 }}>{pct.toFixed(1)}%</td>
+                        <td style={{ ...tdNum(revPct, revenue > 0 ? '#16a34a' : '#d1d5db'), fontSize: 12, fontWeight: 600 }}>
+                          {revenue > 0 ? `${revPct.toFixed(2)}%` : '—'}
+                        </td>
                       </tr>
                     )
                   })}
@@ -373,6 +377,9 @@ export default function FoodCostPage() {
                     <td style={tdNum(totals.end, '#1a2f4e', true)}>{fmtMoney(totals.end)}</td>
                     <td style={tdNum(totals.usage, '#1a2f4e', true)}>{fmtMoney(totals.usage)}</td>
                     <td style={tdNum(100, '#9ca3af')}>100%</td>
+                    <td style={tdNum(ratio, revenue > 0 ? '#16a34a' : '#d1d5db', true)}>
+                      {revenue > 0 ? `${ratio.toFixed(2)}%` : '—'}
+                    </td>
                   </tr>
                 </tfoot>
               </table>
