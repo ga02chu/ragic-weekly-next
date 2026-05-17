@@ -44,37 +44,9 @@ function fmtDateRange(from: string, to: string) {
   return `${y1} 年 ${m1}/${d1} – ${m2}/${d2}`
 }
 
-// 對 (vendor, store) 找 ≤ refDate 的盤點金額。
-//
-// 為什麼複雜：一個 (廠商, 分店) 的盤點常常分多筆 record（不同倉位/分類，例如冷藏 + 冷凍）。
-// 若某天只盤了一部分（其他倉位漏盤）→ 只取「最新一天的記錄」會嚴重低估。
-//
-// 解法：按金額大小排序當作「倉位 rank」（最小=rank0、次小=rank1...）；
-//      每個 rank 獨立找 ≤ refDate 的最新記錄，再加總所有 rank。
-//      這樣 4/5 只盤了「小倉」14,471，「大倉」會 carry forward 3/31 的 59,392。
-function compartmentSum(rows: Row[]): number {
-  if (!rows.length) return 0
-  // 按日期分組；同日內按金額升冪
-  const byDate: Record<string, Row[]> = {}
-  for (const r of rows) (byDate[r.date] ||= []).push(r)
-  for (const d in byDate) byDate[d].sort((a, b) => a.amount - b.amount)
-  const sortedDates = Object.keys(byDate).sort()
-  const maxRank = Math.max(...Object.values(byDate).map(a => a.length))
-  let total = 0
-  for (let rank = 0; rank < maxRank; rank++) {
-    let latestVal = 0
-    let found = false
-    for (const d of sortedDates) {
-      if (byDate[d][rank] !== undefined) {
-        latestVal = byDate[d][rank].amount
-        found = true
-      }
-    }
-    if (found) total += latestVal
-  }
-  return total
-}
-
+// 對 (vendor, store) 找 ≤ refDate 的盤點金額：
+// 取「最近一天」的所有 record 加總（同日多筆 = 不同倉位/分批盤，全部 sum）。
+// 不做歷史 carry-forward — 如果某天漏盤、使用量會變負，UI 端會打警告但忠實顯示 Ragic 資料。
 function latestInventoryBefore(inv: Row[], refDate: string, vendor: string, store: string): number {
   const filtered = inv.filter(r =>
     r.vendor === vendor &&
@@ -85,9 +57,17 @@ function latestInventoryBefore(inv: Row[], refDate: string, vendor: string, stor
   if (store === '__ALL__') {
     const byStore: Record<string, Row[]> = {}
     filtered.forEach(r => { (byStore[r.store] ||= []).push(r) })
-    return Object.values(byStore).reduce((s, rows) => s + compartmentSum(rows), 0)
+    let total = 0
+    for (const rows of Object.values(byStore)) {
+      rows.sort((a, b) => b.date.localeCompare(a.date))
+      const latestDate = rows[0].date
+      total += rows.filter(r => r.date === latestDate).reduce((s, r) => s + r.amount, 0)
+    }
+    return total
   }
-  return compartmentSum(filtered)
+  filtered.sort((a, b) => b.date.localeCompare(a.date))
+  const latestDate = filtered[0].date
+  return filtered.filter(r => r.date === latestDate).reduce((s, r) => s + r.amount, 0)
 }
 
 export default function FoodCostPage() {
@@ -336,7 +316,15 @@ export default function FoodCostPage() {
                     const pct = totals.usage > 0 ? (r.usage / totals.usage) * 100 : 0
                     return (
                       <tr key={r.vendor} style={{ borderBottom: '1px solid #f0eee9' }}>
-                        <td style={{ padding: '9px 14px', fontWeight: 500 }}>{r.vendor}</td>
+                        <td style={{ padding: '9px 14px', fontWeight: 500 }}>
+                          {r.vendor}
+                          {r.usage < 0 && (
+                            <span title="使用量為負，通常代表期間內某次盤點漏盤（例：4/5 只盤了部分品項）。請確認 Ragic 盤點是否完整。"
+                                  style={{ marginLeft: 6, fontSize: 10, padding: '1px 6px', borderRadius: 20, background: '#fee2e2', color: '#dc2626', fontWeight: 600, cursor: 'help' }}>
+                              ⚠ 漏盤
+                            </span>
+                          )}
+                        </td>
                         <td style={tdNum(r.begin, '#6b7280')}>{r.begin ? fmtMoney(r.begin) : '—'}</td>
                         <td style={tdNum(r.purchases, BRAND, true)}>{r.purchases ? fmtMoney(r.purchases) : '—'}</td>
                         <td style={tdNum(r.end, '#6b7280')}>{r.end ? fmtMoney(r.end) : '—'}</td>
