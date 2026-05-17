@@ -138,12 +138,19 @@ export default function FoodCostPage() {
   }, [salesRecords, from, to, storeFilter])
 
   // 按 vendor 加總當週進貨；篩 store；可選排除員工餐專用單
-  // 固定的廠商清單（針對當前分店，只跟歷史上有沒有資料有關，不會因週次變動）
+  // 固定的廠商清單（依「歷史所有進貨總額」由大到小排序，跨週完全不變）
   const vendorsForStore = useMemo(() => {
     if (!data) return [] as string[]
     const allP = storeFilter === '__ALL__' ? data.purchases : data.purchases.filter(p => p.store === storeFilter)
     const allI = storeFilter === '__ALL__' ? data.inventory : data.inventory.filter(i => i.store === storeFilter)
-    return Array.from(new Set([...allP.map(p => p.vendor), ...allI.map(i => i.vendor)].filter(Boolean)))
+    const lifetimeBuy: Record<string, number> = {}
+    allP.forEach(p => { lifetimeBuy[p.vendor] = (lifetimeBuy[p.vendor] || 0) + p.amount })
+    // 只有盤點沒進貨的廠商也要顯示，總額 0 排最後
+    const allVendors = new Set([...allP.map(p => p.vendor), ...allI.map(i => i.vendor)].filter(Boolean))
+    return Array.from(allVendors).sort((a, b) => {
+      const diff = (lifetimeBuy[b] || 0) - (lifetimeBuy[a] || 0)
+      return diff !== 0 ? diff : a.localeCompare(b)
+    })
   }, [data, storeFilter])
 
   const tableRows = useMemo(() => {
@@ -160,13 +167,14 @@ export default function FoodCostPage() {
     const prevDay = addDays(new Date(from + 'T00:00:00'), -1)
     const prevDayISO = toISO(prevDay)
 
+    // 順序直接照 vendorsForStore（已按歷史總進貨排好），不再二次排序
     const rows = vendorsForStore.map(vendor => {
       const begin = latestInventoryBefore(invFiltered, prevDayISO, vendor, storeFilter)
       const purchases = inRange.filter(p => p.vendor === vendor).reduce((s, p) => s + p.amount, 0)
       const end = latestInventoryBefore(invFiltered, to, vendor, storeFilter)
       const usage = begin + purchases - end
       return { vendor, begin, purchases, end, usage }
-    }).sort((a, b) => b.purchases - a.purchases || b.usage - a.usage || a.vendor.localeCompare(b.vendor))
+    })
 
     return rows
   }, [data, from, to, storeFilter, excludeStaffMeal, vendorsForStore])
