@@ -121,10 +121,31 @@ export default function DashboardPage() {
     fetch('/api/food-cost').then(r => r.ok ? r.json() : null).then(d => {
       if (d && Array.isArray(d.purchases)) setFoodCost({ purchases: d.purchases, inventory: d.inventory || [] })
     }).catch(() => { /* ignore */ })
+
+    // 先讀 localStorage（自己的）→ 立即顯示
     try {
       const raw = localStorage.getItem('hr_last_result')
       if (raw) setHrSnapshot(JSON.parse(raw))
     } catch { /* ignore */ }
+    // 再從 Supabase 拉最新（跨用戶共享）→ 蓋掉本機版本
+    fetch('/api/hr-snapshot')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        const list = d?.snapshots
+        if (!Array.isArray(list) || list.length === 0) return
+        const latest = list[0]
+        const normalized: HRSnapshot = {
+          calcAt: new Date(latest.calc_at).getTime(),
+          year: latest.year,
+          month: latest.month,
+          viewMode: latest.view_mode || 'month',
+          dateFrom: latest.date_from || '',
+          dateTo: latest.date_to || '',
+          totalCost: Number(latest.total_cost) || 0,
+          byStore: Array.isArray(latest.by_store) ? latest.by_store : [],
+        }
+        setHrSnapshot(normalized)
+      }).catch(() => { /* ignore */ })
   }, [])
 
   const mounted = useRef(false)
