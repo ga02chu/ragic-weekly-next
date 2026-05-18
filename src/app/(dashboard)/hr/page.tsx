@@ -64,22 +64,121 @@ const BRAND = '#3c2929'
 type ViewMode = 'week' | 'month'
 type ResultTab = 'employees' | 'dept' | 'store' | 'crossStore' | 'anom'
 type FileKey = 'pay' | 'att' | 'loc' | 'adj' | 'brk'
-type FileStatus = 'idle' | 'loaded' | 'error'
+type FileStatus = 'idle' | 'loaded' | 'error' | 'parsing'
+type FileMeta = { name: string; size: number; uploadedAt: number }
 
-function UploadZone({ label, status, onFile }: { label: string; status: FileStatus; onFile: (f: File) => void }) {
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(2)} MB`
+}
+function fmtTimeAgo(ts: number): string {
+  const diff = Date.now() - ts
+  if (diff < 60_000) return '剛剛'
+  if (diff < 3600_000) return `${Math.floor(diff / 60_000)} 分鐘前`
+  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)} 小時前`
+  const d = new Date(ts)
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function UploadZone({ label, icon, hint, status, meta, error, onFile, onClear }: {
+  label: string
+  icon: string
+  hint?: string
+  status: FileStatus
+  meta?: FileMeta
+  error?: string
+  onFile: (f: File) => void
+  onClear?: () => void
+}) {
   const inputRef = useRef<HTMLInputElement>(null)
-  const bg = status === 'loaded' ? '#f0fdf4' : status === 'error' ? '#fef2f2' : '#fafaf8'
-  const border = status === 'loaded' ? '#86efac' : status === 'error' ? '#fca5a5' : '#e5e7eb'
-  const icon = status === 'loaded' ? '✓' : status === 'error' ? '!' : '↑'
-  const iconColor = status === 'loaded' ? '#16a34a' : status === 'error' ? '#dc2626' : '#9ca3af'
+  const [dragOver, setDragOver] = useState(false)
+
+  const isLoaded = status === 'loaded'
+  const isError = status === 'error'
+  const isParsing = status === 'parsing'
+
+  const bg = isParsing ? '#fffbeb' : isLoaded ? '#f0fdf4' : isError ? '#fef2f2' : dragOver ? '#eff6ff' : '#fafaf8'
+  const border = isParsing ? '#fbbf24' : isLoaded ? '#86efac' : isError ? '#fca5a5' : dragOver ? '#3b82f6' : '#d1d5db'
+  const borderStyle = dragOver || isParsing ? 'solid' : isLoaded || isError ? 'solid' : 'dashed'
+  const iconColor = isParsing ? '#d97706' : isLoaded ? '#16a34a' : isError ? '#dc2626' : '#9ca3af'
+
+  const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setDragOver(true) }
+  const onDragLeave = (e: React.DragEvent) => { e.preventDefault(); setDragOver(false) }
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setDragOver(false)
+    const file = e.dataTransfer.files?.[0]
+    if (file) onFile(file)
+  }
+
   return (
-    <div onClick={() => inputRef.current?.click()}
-      style={{ background: bg, border: `2px dashed ${border}`, borderRadius: 10, padding: '16px 12px', cursor: 'pointer', textAlign: 'center' }}>
+    <div
+      onClick={() => !isParsing && inputRef.current?.click()}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      style={{
+        position: 'relative',
+        background: bg,
+        border: `2px ${borderStyle} ${border}`,
+        borderRadius: 10,
+        padding: '14px 12px',
+        cursor: isParsing ? 'wait' : 'pointer',
+        textAlign: 'center',
+        transition: 'all .15s',
+        minHeight: 110,
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        gap: 4,
+      }}
+    >
       <input ref={inputRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }}
         onChange={e => e.target.files?.[0] && onFile(e.target.files[0])} />
-      <div style={{ fontSize: 20, color: iconColor, marginBottom: 4 }}>{icon}</div>
-      <div style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>{label}</div>
-      <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>點擊上傳 .xlsx</div>
+
+      {/* Clear button (loaded state) */}
+      {isLoaded && onClear && (
+        <button
+          onClick={e => { e.stopPropagation(); onClear() }}
+          title="清除這個檔案"
+          style={{
+            position: 'absolute', top: 4, right: 4, border: 'none', background: 'transparent',
+            cursor: 'pointer', color: '#9ca3af', fontSize: 16, padding: '0 6px', lineHeight: 1,
+          }}
+        >×</button>
+      )}
+
+      {/* Icon */}
+      <div style={{ fontSize: 22, lineHeight: 1, color: iconColor }}>
+        {isParsing ? <span style={{ display: 'inline-block', animation: 'spin 1s linear infinite' }}>⏳</span>
+          : isLoaded ? '✓'
+          : isError ? '⚠'
+          : dragOver ? '⬇'
+          : icon}
+      </div>
+
+      {/* Label */}
+      <div style={{ fontSize: 13, fontWeight: 600, color: '#1a2f4e' }}>{label}</div>
+
+      {/* Status content */}
+      {isParsing ? (
+        <div style={{ fontSize: 11, color: '#d97706', fontWeight: 600 }}>解析中…</div>
+      ) : isLoaded && meta ? (
+        <>
+          <div style={{ fontSize: 11, color: '#16a34a', fontWeight: 600, wordBreak: 'break-all', lineHeight: 1.3 }} title={meta.name}>
+            {meta.name.length > 26 ? meta.name.slice(0, 24) + '…' : meta.name}
+          </div>
+          <div style={{ fontSize: 10, color: '#6b7280' }}>
+            {fmtBytes(meta.size)} · {fmtTimeAgo(meta.uploadedAt)}
+          </div>
+        </>
+      ) : isError ? (
+        <div style={{ fontSize: 11, color: '#dc2626', wordBreak: 'break-all' }}>{error || '解析失敗'}</div>
+      ) : (
+        <div style={{ fontSize: 11, color: '#6b7280' }}>{dragOver ? '放開以上傳' : hint || '點擊或拖拉 .xlsx'}</div>
+      )}
+
+      <style>{`@keyframes spin { from{transform:rotate(0)} to{transform:rotate(360deg)} }`}</style>
     </div>
   )
 }
@@ -123,6 +222,7 @@ export default function HRPage() {
   const [activePreset, setActivePreset] = useState<'mtd' | 'lastSun' | 'lastWeek' | null>(null)
   const [fileStatus, setFileStatus] = useState<Record<FileKey, FileStatus>>({ pay: 'idle', att: 'idle', loc: 'idle', adj: 'idle', brk: 'idle' })
   const [parseErr, setParseErr] = useState<Record<FileKey, string>>({ pay: '', att: '', loc: '', adj: '', brk: '' })
+  const [fileMeta, setFileMeta] = useState<Record<FileKey, FileMeta | undefined>>({ pay: undefined, att: undefined, loc: undefined, adj: undefined, brk: undefined })
   const [savedAt, setSavedAt] = useState<number | null>(null)
   const [chartData, setChartData] = useState<{ name: string; rev: number; cost: number }[]>([])
 
@@ -135,6 +235,14 @@ export default function HRPage() {
       const sb = s('hr_data_brk'); if (sb) { setBrk(sb); setFileStatus(p => ({ ...p, brk: 'loaded' })) }
       const sj = s('hr_data_adj'); if (sj) { setAdj(rehydrateAdj(sj)); setFileStatus(p => ({ ...p, adj: 'loaded' })) }
       const sm = s('hr_data_meta'); if (sm?.timestamp) setSavedAt(sm.timestamp)
+      // 還原各檔 meta
+      const keys: FileKey[] = ['pay', 'att', 'loc', 'adj', 'brk']
+      const nextMeta: Record<FileKey, FileMeta | undefined> = { pay: undefined, att: undefined, loc: undefined, adj: undefined, brk: undefined }
+      keys.forEach(k => {
+        const m = s(`hr_meta_${k}`)
+        if (m && typeof m.name === 'string') nextMeta[k] = m as FileMeta
+      })
+      setFileMeta(nextMeta)
     } catch { /* ignore */ }
   }, [])
 
@@ -148,7 +256,7 @@ export default function HRPage() {
 
   const handleFile = useCallback(async (key: FileKey, file: File) => {
     setParseErr(prev => ({ ...prev, [key]: '' }))
-    setFileStatus(prev => ({ ...prev, [key]: 'idle' }))
+    setFileStatus(prev => ({ ...prev, [key]: 'parsing' }))
     try {
       const buf = await file.arrayBuffer()
       const wb = XLSX.read(buf, { type: 'array', cellDates: true })
@@ -159,8 +267,11 @@ export default function HRPage() {
       else if (key === 'adj') { parsed = parseAdj(wb); setAdj(parsed as ParsedAdjustments) }
       else { parsed = parseBreak(wb); setBrk(parsed as BreakRecord[]) }
       setFileStatus(prev => ({ ...prev, [key]: 'loaded' }))
+      const meta: FileMeta = { name: file.name, size: file.size, uploadedAt: Date.now() }
+      setFileMeta(prev => ({ ...prev, [key]: meta }))
       try {
         localStorage.setItem(`hr_data_${key}`, JSON.stringify(parsed))
+        localStorage.setItem(`hr_meta_${key}`, JSON.stringify(meta))
         const ts = Date.now()
         localStorage.setItem('hr_data_meta', JSON.stringify({ timestamp: ts }))
         setSavedAt(ts)
@@ -169,6 +280,21 @@ export default function HRPage() {
       setFileStatus(prev => ({ ...prev, [key]: 'error' }))
       setParseErr(prev => ({ ...prev, [key]: e instanceof Error ? e.message : '解析失敗' }))
     }
+  }, [])
+
+  const clearFile = useCallback((key: FileKey) => {
+    setFileStatus(prev => ({ ...prev, [key]: 'idle' }))
+    setFileMeta(prev => ({ ...prev, [key]: undefined }))
+    setParseErr(prev => ({ ...prev, [key]: '' }))
+    if (key === 'pay') setPay([])
+    else if (key === 'att') setAtt(null)
+    else if (key === 'loc') setLoc([])
+    else if (key === 'adj') setAdj(emptyAdj)
+    else setBrk([])
+    try {
+      localStorage.removeItem(`hr_data_${key}`)
+      localStorage.removeItem(`hr_meta_${key}`)
+    } catch { /* ignore */ }
   }, [])
 
   const compute = useCallback(async () => {
@@ -468,18 +594,28 @@ export default function HRPage() {
           )}
         </div>
         {uploadOpen && <div style={{ padding: '16px 20px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 10 }}>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
+            💡 點擊或<strong>拖拉檔案</strong>到對應方塊。資料會自動存在你的瀏覽器，下次打開不用再上傳。
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 10 }}>
             {([
-              { key: 'pay' as FileKey, label: '薪資表（必填）' },
-              { key: 'att' as FileKey, label: '出勤紀錄（必填）' },
-              { key: 'loc' as FileKey, label: '上班打卡（必填）' },
-              { key: 'brk' as FileKey, label: '休息紀錄（必填）' },
-              { key: 'adj' as FileKey, label: '調整表（選填，月報用）' },
-            ]).map(({ key, label }) => (
-              <div key={key}>
-                <UploadZone label={label} status={fileStatus[key]} onFile={f => handleFile(key, f)} />
-                {parseErr[key] && <div style={{ fontSize: 11, color: '#dc2626', marginTop: 4 }}>{parseErr[key]}</div>}
-              </div>
+              { key: 'pay' as FileKey, label: '薪資表',     icon: '💰', hint: '必填' },
+              { key: 'att' as FileKey, label: '出勤紀錄',   icon: '📋', hint: '必填' },
+              { key: 'loc' as FileKey, label: '上班打卡',   icon: '📍', hint: '必填' },
+              { key: 'brk' as FileKey, label: '休息紀錄',   icon: '☕', hint: '必填' },
+              { key: 'adj' as FileKey, label: '調整表',     icon: '🔧', hint: '選填（月報用）' },
+            ]).map(({ key, label, icon, hint }) => (
+              <UploadZone
+                key={key}
+                label={label}
+                icon={icon}
+                hint={hint}
+                status={fileStatus[key]}
+                meta={fileMeta[key]}
+                error={parseErr[key]}
+                onFile={f => handleFile(key, f)}
+                onClear={() => clearFile(key)}
+              />
             ))}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 11, color: '#9ca3af', flexWrap: 'wrap' }}>
