@@ -183,6 +183,44 @@ function UploadZone({ label, icon, hint, status, meta, error, onFile, onClear }:
   )
 }
 
+function BatchDropZone({ onFiles }: { onFiles: (files: File[]) => void }) {
+  const [dragOver, setDragOver] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setDragOver(false)
+    const files = Array.from(e.dataTransfer.files || [])
+    if (files.length) onFiles(files)
+  }
+  return (
+    <div
+      onClick={() => inputRef.current?.click()}
+      onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+      onDragLeave={e => { e.preventDefault(); setDragOver(false) }}
+      onDrop={handleDrop}
+      style={{
+        background: dragOver ? '#eff6ff' : '#fafaf8',
+        border: `2px ${dragOver ? 'solid' : 'dashed'} ${dragOver ? '#3b82f6' : '#cbd5e1'}`,
+        borderRadius: 12,
+        padding: '20px 16px',
+        marginBottom: 14,
+        cursor: 'pointer',
+        textAlign: 'center',
+        transition: 'all .15s',
+      }}
+    >
+      <input ref={inputRef} type="file" accept=".xlsx,.xls" multiple style={{ display: 'none' }}
+        onChange={e => { const fs = Array.from(e.target.files || []); if (fs.length) onFiles(fs); e.target.value = '' }} />
+      <div style={{ fontSize: 24, marginBottom: 4 }}>{dragOver ? '⬇' : '📥'}</div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: '#1a2f4e', marginBottom: 4 }}>
+        {dragOver ? '放開以一次上傳所有檔案' : '一次拖拉所有 Excel 檔到這裡'}
+      </div>
+      <div style={{ fontSize: 11, color: '#6b7280' }}>
+        系統會依檔名關鍵字自動分類（薪資 / 出勤 / 打卡 / 休息 / 調整）
+      </div>
+    </div>
+  )
+}
+
 export default function HRPage() {
   const now = new Date()
   const [year, setYear] = useState(now.getFullYear())
@@ -594,8 +632,22 @@ export default function HRPage() {
           )}
         </div>
         {uploadOpen && <div style={{ padding: '16px 20px' }}>
+          {/* 批次拖拉區 */}
+          <BatchDropZone onFiles={files => {
+            files.forEach(f => {
+              const lower = f.name.toLowerCase()
+              const name = f.name
+              let key: FileKey | null = null
+              if (name.includes('薪資') || lower.includes('pay') || lower.includes('salary')) key = 'pay'
+              else if (name.includes('出勤') || lower.includes('att')) key = 'att'
+              else if (name.includes('上班打卡') || name.includes('打卡') || lower.includes('loc')) key = 'loc'
+              else if (name.includes('休息') || lower.includes('brk') || lower.includes('break')) key = 'brk'
+              else if (name.includes('調整') || lower.includes('adj') || lower.includes('adjust')) key = 'adj'
+              if (key) handleFile(key, f)
+            })
+          }} />
           <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-            💡 點擊或<strong>拖拉檔案</strong>到對應方塊。資料會自動存在你的瀏覽器，下次打開不用再上傳。
+            💡 也可以直接點擊或<strong>拖拉</strong>到下方各別方塊。資料會自動存在你的瀏覽器，下次打開不用再上傳。
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 10 }}>
             {([
@@ -668,9 +720,29 @@ export default function HRPage() {
           </div>
           <div>
             <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>計算模式</div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button onClick={() => setViewMode('month')} style={btnStyle(viewMode === 'month')}>整月結算</button>
-              <button onClick={() => setViewMode('week')} style={btnStyle(viewMode === 'week')}>週報（至今+預估）</button>
+            <div style={{ display: 'inline-flex', background: '#f3f0ea', borderRadius: 10, padding: 3, border: '1px solid #e8e6e1' }}>
+              <button onClick={() => setViewMode('month')}
+                style={{
+                  padding: '8px 18px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                  background: viewMode === 'month' ? BRAND : 'transparent',
+                  color: viewMode === 'month' ? '#fff' : '#6b7280',
+                  fontSize: 13, fontWeight: 700,
+                  boxShadow: viewMode === 'month' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  transition: 'all .15s',
+                }}>
+                📅 整月結算
+              </button>
+              <button onClick={() => setViewMode('week')}
+                style={{
+                  padding: '8px 18px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                  background: viewMode === 'week' ? BRAND : 'transparent',
+                  color: viewMode === 'week' ? '#fff' : '#6b7280',
+                  fontSize: 13, fontWeight: 700,
+                  boxShadow: viewMode === 'week' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  transition: 'all .15s',
+                }}>
+                📊 週報（至今+預估）
+              </button>
             </div>
           </div>
           {viewMode === 'week' && (
