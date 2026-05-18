@@ -430,6 +430,19 @@ export default function HRPage() {
         }),
       }).catch(() => { /* 即使失敗，本機 localStorage 還是有 */ })
 
+      // 自動傳到 LINE 群組（只在週報模式 + 有 dist 資料時）
+      if (viewMode === 'week' && dist.length > 0 && dateFrom && dateTo) {
+        fetch('/api/notify-line', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storeDist: dist,
+            period: { from: dateFrom, to: dateTo },
+            viewMode: 'week',
+          }),
+        }).catch(() => { /* 失敗就算了，使用者可手動點按鈕補發 */ })
+      }
+
       // Fetch Ragic revenue for chart comparison
       try {
         const allRecords = await fetchAllRecords()
@@ -1143,15 +1156,35 @@ export default function HRPage() {
                       ))}
                     </div>
 
-                    {/* 一鍵複製文字（秘書貼到別處用） */}
-                    <div style={{ padding: '0 20px 16px' }}>
+                    {/* 一鍵複製文字 / 傳到 LINE */}
+                    <div style={{ padding: '0 20px 16px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       <button onClick={() => {
                         const text = storeDist.map(s =>
                           `[${s.cat}]\n正職： ${s.ftH.toFixed(2)} (內場 ${s.ftInnerH.toFixed(2)} / 外場 ${s.ftOuterH.toFixed(2)})\n工讀： ${s.ptH.toFixed(2)} (內場 ${s.ptInnerH.toFixed(2)} / 外場 ${s.ptOuterH.toFixed(2)})\n總時數： ${s.totalH.toFixed(2)}`
                         ).join('\n\n')
                         navigator.clipboard.writeText(text).then(() => alert('已複製到剪貼簿'))
                       }} style={{ padding: '6px 14px', borderRadius: 7, border: '1px solid #e5e7eb', background: '#fff', fontSize: 12, cursor: 'pointer', color: '#374151' }}>
-                        📋 複製文字（給秘書貼）
+                        📋 複製文字
+                      </button>
+                      <button onClick={async () => {
+                        const pad = (n: number) => String(n).padStart(2, '0')
+                        const period = viewMode === 'week'
+                          ? { from: dateFrom, to: dateTo }
+                          : { from: `${year}-${pad(month)}-01`, to: `${year}-${pad(month)}-${pad(new Date(year, month, 0).getDate())}` }
+                        try {
+                          const res = await fetch('/api/notify-line', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ storeDist, period, viewMode }),
+                          })
+                          const data = await res.json().catch(() => ({}))
+                          if (res.ok) alert('✓ 已傳到 LINE 群組')
+                          else alert(`❌ 失敗：${data.error || res.status}`)
+                        } catch (e) {
+                          alert(`❌ 失敗：${e instanceof Error ? e.message : '網路錯誤'}`)
+                        }
+                      }} style={{ padding: '6px 14px', borderRadius: 7, border: '1px solid #10b981', background: '#10b981', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                        📨 傳到 LINE 群組
                       </button>
                     </div>
 
