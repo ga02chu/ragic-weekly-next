@@ -722,7 +722,7 @@ export default function HRPage() {
               let key: FileKey | null = null
               if (name.includes('薪資') || lower.includes('pay') || lower.includes('salary')) key = 'pay'
               else if (name.includes('出勤') || lower.includes('att')) key = 'att'
-              else if (name.includes('上班打卡') || name.includes('打卡') || lower.includes('loc')) key = 'loc'
+              else if (name.includes('上下班') || name.includes('上班打卡') || name.includes('打卡') || lower.includes('loc') || lower.includes('clock')) key = 'loc'
               else if (name.includes('休息') || lower.includes('brk') || lower.includes('break')) key = 'brk'
               else if (name.includes('調整') || lower.includes('adj') || lower.includes('adjust')) key = 'adj'
               if (key) handleFile(key, f)
