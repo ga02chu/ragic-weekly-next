@@ -237,10 +237,10 @@ export function parsePay(wb: XLSX.WorkBook): HREmployee[] {
     const bs = +r[3] || 0, hr = +r[5] || 0, meal = +r[4] || 0, mgmt = +r[6] || 0, housing = +r[7] || 0
     const perf = +r[8] || 0, annual = +r[9] || 0, skill = +r[10] || 0
     const title = titleIdx >= 0 ? String(r[titleIdx] || '').trim() : ''
+    const paren = title.match(/[(（]([內外])[)）]/)?.[1] || ''
     let titleLoc = ''
-    if (title.includes('內場') || title === '廚師長') titleLoc = '內場'
-    else if (title.includes('外場')) titleLoc = '外場'
-    else if (title === '兼職人員') titleLoc = '兼職'
+    if (title.includes('內場') || paren === '內' || title === '廚師長') titleLoc = '內場'
+    else if (title.includes('外場') || paren === '外') titleLoc = '外場'
     else if (['督導', '行政助理', '執行長', '廚師長'].some(t => title.includes(t)) && !title.includes('內場') && !title.includes('外場')) titleLoc = '總部'
     return {
       id: String(r[0]).trim(), name: String(r[1]).trim(), dept: String(r[2]).trim(),
