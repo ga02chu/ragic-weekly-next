@@ -266,24 +266,91 @@ export default function HRPage() {
   const [savedAt, setSavedAt] = useState<number | null>(null)
   const [chartData, setChartData] = useState<{ name: string; rev: number; cost: number }[]>([])
 
+  // 雲端=唯一真實來源；localStorage 只當離線快取/初次 paint。
+  // 進場流程：先從 /api/hr-raw 抓最新，cloud 有→ override local；cloud 沒→ 清掉舊 local；
+  // cloud 掛掉→ 退而 fallback localStorage。
   useEffect(() => {
-    try {
-      const s = (k: string) => { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null }
-      const sp = s('hr_data_pay'); if (sp) { setPay(rehydratePay(sp)); setFileStatus(p => ({ ...p, pay: 'loaded' })) }
-      const sa = s('hr_data_att'); if (sa) { setAtt(rehydrateAtt(sa)); setFileStatus(p => ({ ...p, att: 'loaded' })) }
-      const sl = s('hr_data_loc'); if (sl) { setLoc(rehydrateLoc(sl)); setFileStatus(p => ({ ...p, loc: 'loaded' })) }
-      const sb = s('hr_data_brk'); if (sb) { setBrk(sb); setFileStatus(p => ({ ...p, brk: 'loaded' })) }
-      const sj = s('hr_data_adj'); if (sj) { setAdj(rehydrateAdj(sj)); setFileStatus(p => ({ ...p, adj: 'loaded' })) }
-      const sm = s('hr_data_meta'); if (sm?.timestamp) setSavedAt(sm.timestamp)
-      // 還原各檔 meta
-      const keys: FileKey[] = ['pay', 'att', 'loc', 'adj', 'brk']
-      const nextMeta: Record<FileKey, FileMeta | undefined> = { pay: undefined, att: undefined, loc: undefined, adj: undefined, brk: undefined }
-      keys.forEach(k => {
-        const m = s(`hr_meta_${k}`)
-        if (m && typeof m.name === 'string') nextMeta[k] = m as FileMeta
+    let aborted = false
+    const loadFromLocal = () => {
+      try {
+        const s = (k: string) => { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null }
+        const sp = s('hr_data_pay'); if (sp) { setPay(rehydratePay(sp)); setFileStatus(p => ({ ...p, pay: 'loaded' })) }
+        const sa = s('hr_data_att'); if (sa) { setAtt(rehydrateAtt(sa)); setFileStatus(p => ({ ...p, att: 'loaded' })) }
+        const sl = s('hr_data_loc'); if (sl) { setLoc(rehydrateLoc(sl)); setFileStatus(p => ({ ...p, loc: 'loaded' })) }
+        const sb = s('hr_data_brk'); if (sb) { setBrk(sb); setFileStatus(p => ({ ...p, brk: 'loaded' })) }
+        const sj = s('hr_data_adj'); if (sj) { setAdj(rehydrateAdj(sj)); setFileStatus(p => ({ ...p, adj: 'loaded' })) }
+        const sm = s('hr_data_meta'); if (sm?.timestamp) setSavedAt(sm.timestamp)
+        const keys: FileKey[] = ['pay', 'att', 'loc', 'adj', 'brk']
+        const nextMeta: Record<FileKey, FileMeta | undefined> = { pay: undefined, att: undefined, loc: undefined, adj: undefined, brk: undefined }
+        keys.forEach(k => {
+          const m = s(`hr_meta_${k}`)
+          if (m && typeof m.name === 'string') nextMeta[k] = m as FileMeta
+        })
+        setFileMeta(nextMeta)
+      } catch { /* ignore */ }
+    }
+
+    // 先樂觀畫一版（避免一進來空白）
+    loadFromLocal()
+
+    // 再從雲端覆蓋
+    fetch('/api/hr-raw').then(r => r.json()).then(({ uploads, error }) => {
+      if (aborted) return
+      if (error || !Array.isArray(uploads)) throw new Error(error || 'bad response')
+      const byKey: Record<string, { file_key: FileKey; data: unknown; meta: FileMeta | null; uploaded_at: string }> = {}
+      uploads.forEach((u: { file_key: FileKey; data: unknown; meta: FileMeta | null; uploaded_at: string }) => {
+        byKey[u.file_key] = u
       })
-      setFileMeta(nextMeta)
-    } catch { /* ignore */ }
+
+      const applyState = <T,>(key: FileKey, raw: unknown, setData: (v: T) => void, rehydrate?: (r: unknown) => T) => {
+        const v = (rehydrate ? rehydrate(raw) : raw) as T
+        setData(v)
+      }
+      const applyOrClear = (key: FileKey, clearFn: () => void) => {
+        const u = byKey[key]
+        if (u) {
+          if (key === 'pay') applyState<HREmployee[]>(key, u.data, setPay, (r) => rehydratePay(r as HREmployee[]))
+          else if (key === 'att') applyState<AttResult>(key, u.data, setAtt, (r) => rehydrateAtt(r as AttResult))
+          else if (key === 'loc') applyState<LocRecord[]>(key, u.data, setLoc, (r) => rehydrateLoc(r as LocRecord[]))
+          else if (key === 'adj') applyState<ParsedAdjustments>(key, u.data, setAdj, (r) => rehydrateAdj(r))
+          else applyState<BreakRecord[]>(key, u.data, setBrk)
+          setFileStatus(p => ({ ...p, [key]: 'loaded' }))
+          if (u.meta && typeof u.meta.name === 'string') setFileMeta(p => ({ ...p, [key]: u.meta as FileMeta }))
+          try {
+            localStorage.setItem(`hr_data_${key}`, JSON.stringify(u.data))
+            if (u.meta) localStorage.setItem(`hr_meta_${key}`, JSON.stringify(u.meta))
+          } catch { /* ignore */ }
+        } else {
+          // 雲端沒有 → 清掉本機殘留
+          clearFn()
+          setFileStatus(p => ({ ...p, [key]: 'idle' }))
+          setFileMeta(p => ({ ...p, [key]: undefined }))
+          try {
+            localStorage.removeItem(`hr_data_${key}`)
+            localStorage.removeItem(`hr_meta_${key}`)
+          } catch { /* ignore */ }
+        }
+      }
+
+      applyOrClear('pay', () => setPay([]))
+      applyOrClear('att', () => setAtt(null))
+      applyOrClear('loc', () => setLoc([]))
+      applyOrClear('adj', () => setAdj(emptyAdj))
+      applyOrClear('brk', () => setBrk([]))
+
+      if (uploads.length) {
+        const latest = Math.max(...uploads.map((u: { uploaded_at: string }) => new Date(u.uploaded_at).getTime()))
+        setSavedAt(latest)
+        try { localStorage.setItem('hr_data_meta', JSON.stringify({ timestamp: latest })) } catch { /* ignore */ }
+      } else {
+        setSavedAt(null)
+        try { localStorage.removeItem('hr_data_meta') } catch { /* ignore */ }
+      }
+    }).catch(() => {
+      // 雲端掛掉時保留剛剛樂觀載入的 local
+    })
+
+    return () => { aborted = true }
   }, [])
 
   const [calcResult, setCalcResult] = useState<CalcResult | null>(null)
@@ -316,6 +383,14 @@ export default function HRPage() {
         localStorage.setItem('hr_data_meta', JSON.stringify({ timestamp: ts }))
         setSavedAt(ts)
       } catch { /* storage full, ignore */ }
+      // 同步上雲端（不阻塞 UI；失敗只 log，不影響本機已 parse 的結果）
+      fetch('/api/hr-raw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_key: key, data: parsed, meta }),
+      }).then(r => r.json()).then(res => {
+        if (res?.error) console.warn('[hr-raw upload]', res.error)
+      }).catch(err => console.warn('[hr-raw upload]', err))
     } catch (e: unknown) {
       setFileStatus(prev => ({ ...prev, [key]: 'error' }))
       setParseErr(prev => ({ ...prev, [key]: e instanceof Error ? e.message : '解析失敗' }))
@@ -335,6 +410,11 @@ export default function HRPage() {
       localStorage.removeItem(`hr_data_${key}`)
       localStorage.removeItem(`hr_meta_${key}`)
     } catch { /* ignore */ }
+    // 同步刪雲端，避免下次重整時又被拉回來
+    fetch(`/api/hr-raw?file_key=${encodeURIComponent(key)}`, { method: 'DELETE' })
+      .then(r => r.json()).then(res => {
+        if (res?.error) console.warn('[hr-raw delete]', res.error)
+      }).catch(err => console.warn('[hr-raw delete]', err))
   }, [])
 
   const compute = useCallback(async () => {
