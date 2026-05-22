@@ -430,19 +430,6 @@ export default function HRPage() {
         }),
       }).catch(() => { /* 即使失敗，本機 localStorage 還是有 */ })
 
-      // 自動傳到 LINE 群組（只在週報模式 + 有 dist 資料時）
-      if (viewMode === 'week' && dist.length > 0 && dateFrom && dateTo) {
-        fetch('/api/notify-line', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            storeDist: dist,
-            period: { from: dateFrom, to: dateTo },
-            viewMode: 'week',
-          }),
-        }).catch(() => { /* 失敗就算了，使用者可手動點按鈕補發 */ })
-      }
-
       // Fetch Ragic revenue for chart comparison
       try {
         const allRecords = await fetchAllRecords()
