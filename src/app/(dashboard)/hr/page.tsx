@@ -10,6 +10,7 @@ import {
   adjDeltaForMonth, adjExtrasForMonth, empPfForMonth, calcResults, computeStoreDist, computeCrossStoreDetail,
   holidayPayForMonth, compHoursIdMap, latePenaltyForMonth, birthdayBonusForMonth,
   foreignerIdsFromNames, mergeExtras, emptyAdj, adjTargetMonth,
+  deriveTitleLoc,
   fT, fH,
   type HREmployee, type AttResult, type LocRecord, type BreakRecord, type CalcResult,
   type ParsedAdjustments,
@@ -19,6 +20,7 @@ import {
 function rehydratePay(raw: HREmployee[]): HREmployee[] {
   return raw.map(p => ({
     ...p,
+    titleLoc: deriveTitleLoc(p.title),
     hireDate: p.hireDate ? new Date(p.hireDate as unknown as string) : null,
     birthday: p.birthday ? new Date(p.birthday as unknown as string) : null,
   }))
