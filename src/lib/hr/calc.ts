@@ -845,6 +845,17 @@ function mapLocToStore(locName: string): string {
   return '其他'
 }
 
+// 跑腿/雜項地點（「其他-買拜拜東西」「其他-銀行」「其他-處理班表」…）不是真的
+// 工作分店，不該把整段工時吞進「其他」桶。依序挑出第一個會對應到「真的店」的
+// 地點；若全部都不是真的店（純跑腿），才回退第一個。
+// 例：上班打「料韓男2號店」、下班打「其他-處理班表」、無休息 → 整段歸 2號店。
+function resolveStore(...locs: string[]): string {
+  for (const l of locs) {
+    if (l && mapLocToStore(l) !== '其他') return l
+  }
+  return locs.find(Boolean) || '未知'
+}
+
 // ── calcResults ────────────────────────────────────────────────────────────
 export function calcResults(
   sDate: Date, eDate: Date,
@@ -1041,22 +1052,101 @@ function segmentByBreaks(
   }).sort((a, b) => a.startMin - b.startMin)
 
   if (sorted.length === 0) {
-    add(outLoc, oM - inMin)
+    // 整段歸下班地點；若下班是跑腿/雜項，回退到上班的真店
+    add(resolveStore(outLoc, inLoc), oM - inMin)
     return out
   }
   if (sorted.length === 1) {
     const b = sorted[0]
-    add(b.startLoc, b.startMin - inMin)
-    add(b.endLoc, oM - b.endMin)
+    add(resolveStore(b.startLoc, inLoc), b.startMin - inMin)
+    add(resolveStore(b.endLoc, outLoc, inLoc), oM - b.endMin)
     return out
   }
   // 多段
-  add(inLoc, sorted[0].startMin - inMin)
+  add(resolveStore(inLoc, outLoc), sorted[0].startMin - inMin)
   for (let i = 0; i < sorted.length - 1; i++) {
-    add(sorted[i].endLoc, sorted[i + 1].startMin - sorted[i].endMin)
+    add(resolveStore(sorted[i].endLoc, inLoc, outLoc), sorted[i + 1].startMin - sorted[i].endMin)
   }
-  add(sorted[sorted.length - 1].endLoc, oM - sorted[sorted.length - 1].endMin)
+  add(resolveStore(sorted[sorted.length - 1].endLoc, outLoc, inLoc), oM - sorted[sorted.length - 1].endMin)
   return out
+}
+
+// ── B. 自動標記可疑打卡 ─────────────────────────────────────────────────────
+// 把會讓「分店分攤」對不準的打卡列自動挑出來，並加總可疑時數（= 手算的「異常打卡」）
+export interface PunchAnomaly extends Anomaly {
+  hours: number
+}
+
+export function detectPunchAnomalies(
+  locR: LocRecord[],
+  brk: BreakRecord[] = [],
+  results: { id: string; name: string; dept: string; titleLoc?: string }[] = []
+): { anomalies: PunchAnomaly[]; suspectH: number } {
+  const isHQ = (e: { dept: string; titleLoc?: string }) =>
+    e.dept.includes('總部') || e.dept.includes('執行長') || e.titleLoc === '總部'
+  const hqIds = new Set(results.filter(isHQ).map(e => e.id))
+  const nameById: Record<string, string> = Object.fromEntries(results.map(e => [e.id, e.name]))
+
+  const brkByEmpDay: Record<string, BreakRecord[]> = {}
+  brk.forEach(b => {
+    const k = `${b.id}:${b.dateStr}`
+    if (!brkByEmpDay[k]) brkByEmpDay[k] = []
+    brkByEmpDay[k].push(b)
+  })
+
+  // 跑腿/雜項：有寫地點、但對不到任何真實分店
+  const isErrand = (loc: string) => {
+    const l = (loc || '').trim()
+    return !!l && l !== '未知' && mapLocToStore(l) === '其他'
+  }
+
+  const anomalies: PunchAnomaly[] = []
+  let suspectH = 0
+  const push = (sev: Anomaly['sev'], type: string, p: LocRecord, detail: string) => {
+    anomalies.push({ sev, type, id: p.id, name: p.name || nameById[p.id] || '', date: p.dateStr, detail, hours: p.hours || 0 })
+    suspectH += p.hours || 0
+  }
+
+  locR.forEach(p => {
+    if (hqIds.has(p.id)) return
+    if (!p.hours || p.hours <= 0) return
+    const inS = mapLocToStore(p.inLoc), outS = mapLocToStore(p.outLoc)
+    const breaks = brkByEmpDay[`${p.id}:${p.dateStr}`] || []
+
+    // 1. 跑腿打卡：一端是跑腿/雜項 → 已自動改歸真店（A），仍標記讓人核對
+    if (isErrand(p.inLoc) || isErrand(p.outLoc)) {
+      const realS = mapLocToStore(resolveStore(p.outLoc, p.inLoc))
+      if (realS !== '其他')
+        push('info', '跑腿打卡', p, `${p.inLoc}→${p.outLoc}，已改歸「${realS}」（${p.hours.toFixed(2)}H）`)
+      else
+        push('warn', '無法判定店別', p, `${p.inLoc}→${p.outLoc}，無真實分店，全歸「其他」（${p.hours.toFixed(2)}H）`)
+      return
+    }
+
+    // 2. 跨店但沒有休息卡橋接：上班店≠下班店、且沒打橋接的休息卡 → 整段被算成下班店
+    if (inS !== outS && inS !== '其他' && outS !== '其他') {
+      const bridged = breaks.some(b => {
+        const bs = mapLocToStore(b.startLoc || ''), be = mapLocToStore(b.endLoc || '')
+        return (bs === inS && be === outS) || (bs === outS && be === inS)
+      })
+      if (!bridged)
+        push('warn', '跨店未橋接', p, `上班@${inS} / 下班@${outS}，無休息卡分界，整段先算「${outS}」（${p.hours.toFixed(2)}H）`)
+      return
+    }
+
+    // 3. 休息卡店別不符：有休息卡，但其地點對應的店既不是上班店也不是下班店
+    const known = new Set([inS, outS])
+    const oddBreak = breaks.find(b => {
+      const bs = mapLocToStore(b.startLoc || ''), be = mapLocToStore(b.endLoc || '')
+      return (b.startLoc && bs !== '其他' && !known.has(bs)) || (b.endLoc && be !== '其他' && !known.has(be))
+    })
+    if (oddBreak)
+      push('warn', '休息卡店別不符', p, `上下班@${inS}，但休息卡打在「${(oddBreak.startLoc || oddBreak.endLoc || '').trim()}」（${p.hours.toFixed(2)}H）`)
+  })
+
+  const ord: Record<Anomaly['sev'], number> = { error: 0, warn: 1, info: 2 }
+  anomalies.sort((a, b) => (ord[a.sev] - ord[b.sev]) || a.date.localeCompare(b.date))
+  return { anomalies, suspectH }
 }
 
 export interface StoreDistRow {
@@ -1145,10 +1235,10 @@ export function computeStoreDist(results: EmployeeResult[], locR: LocRecord[], b
       if (segTotal > 0) {
         Object.entries(segs).forEach(([cat, segH]) => addH(cat, p.id, segH))
       } else {
-        addH(mapLocToStore(p.outLoc || p.inLoc), p.id, h)
+        addH(mapLocToStore(resolveStore(p.outLoc, p.inLoc)), p.id, h)
       }
     } else {
-      addH(mapLocToStore(p.outLoc || p.inLoc), p.id, h)
+      addH(mapLocToStore(resolveStore(p.outLoc, p.inLoc)), p.id, h)
     }
   })
   results.forEach(e => {

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import * as XLSX from 'xlsx'
 import { getMonthlyStdH, fetchAllRecords, getFields } from '@/lib/ragic/fetchRecords'
 import { processRecords } from '@/lib/ragic/processRecords'
@@ -8,14 +8,26 @@ import { fmt } from '@/lib/ragic/utils'
 import {
   parsePay, parseAtt, parseLoc, parseAdj, parseBreak, buildBreakMap,
   adjDeltaForMonth, adjExtrasForMonth, empPfForMonth, calcResults, computeStoreDist, computeCrossStoreDetail,
+  detectPunchAnomalies,
   holidayPayForMonth, compHoursIdMap, latePenaltyForMonth, birthdayBonusForMonth,
   foreignerIdsFromNames, mergeExtras, emptyAdj, adjTargetMonth,
   deriveTitleLoc,
   fT, fH,
   type HREmployee, type AttResult, type LocRecord, type BreakRecord, type CalcResult,
-  type ParsedAdjustments,
+  type ParsedAdjustments, type PunchAnomaly,
 } from '@/lib/hr/calc'
 
+
+interface StoreAdjustment {
+  id: string
+  period_start: string
+  period_end: string
+  store_cat: string
+  delta_h: number
+  reason: string
+  created_at?: string
+  created_by?: string | null
+}
 
 function rehydratePay(raw: HREmployee[]): HREmployee[] {
   return raw.map(p => ({
@@ -356,6 +368,11 @@ export default function HRPage() {
   const [calcResult, setCalcResult] = useState<CalcResult | null>(null)
   const [storeDist, setStoreDist] = useState<ReturnType<typeof computeStoreDist>>([])
   const [crossStore, setCrossStore] = useState<ReturnType<typeof computeCrossStoreDetail>>([])
+  const [punchAnom, setPunchAnom] = useState<{ anomalies: PunchAnomaly[]; suspectH: number }>({ anomalies: [], suspectH: 0 })
+  // C. 分店分攤手動調整
+  const [storeAdj, setStoreAdj] = useState<StoreAdjustment[]>([])
+  const [adjForm, setAdjForm] = useState<{ store: string; delta: string; reason: string }>({ store: '品牌概念店', delta: '', reason: '' })
+  const [adjBusy, setAdjBusy] = useState(false)
   const [crossOnly, setCrossOnly] = useState(true)
   const [crossFtOnly, setCrossFtOnly] = useState(true)
   const [computing, setComputing] = useState(false)
@@ -489,6 +506,7 @@ export default function HRPage() {
       const dist = computeStoreDist(result.results, result.locR, brk)
       setStoreDist(dist)
       setCrossStore(computeCrossStoreDetail(result.results, result.locR, brk))
+      setPunchAnom(detectPunchAnomalies(result.locR, brk, result.results))
 
       // 把人事成本摘要存進 localStorage（個人記錄）+ POST 到 Supabase（跨用戶共享）
       const snapshot = {
@@ -554,6 +572,59 @@ export default function HRPage() {
       ? (e.propSal || 0) + (e.weekOtPay || 0) + (e.propIns || 0)
       : (e.propSal || 0) + (e.propIns || 0))
   }, 0)
+
+  // C. 分店分攤手動調整：期間（與報表 from/to 對齊）、載入、加、刪
+  const periodRange = useMemo(() => {
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return viewMode === 'week'
+      ? { from: dateFrom, to: dateTo }
+      : { from: `${year}-${pad(month)}-01`, to: `${year}-${pad(month)}-${pad(new Date(year, month, 0).getDate())}` }
+  }, [viewMode, dateFrom, dateTo, year, month])
+
+  useEffect(() => {
+    const { from, to } = periodRange
+    if (!from || !to) { setStoreAdj([]); return }
+    let cancelled = false
+    fetch(`/api/hr-store-adj?from=${from}&to=${to}`)
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setStoreAdj(Array.isArray(d.adjustments) ? d.adjustments : []) })
+      .catch(() => { if (!cancelled) setStoreAdj([]) })
+    return () => { cancelled = true }
+  }, [periodRange])
+
+  // 各店調整加總（給分店分攤表用）
+  const adjByStore = useMemo(() => {
+    const m: Record<string, number> = {}
+    storeAdj.forEach(a => { m[a.store_cat] = (m[a.store_cat] || 0) + (Number(a.delta_h) || 0) })
+    return m
+  }, [storeAdj])
+
+  const addStoreAdj = useCallback(async () => {
+    const delta = parseFloat(adjForm.delta)
+    if (!Number.isFinite(delta) || delta === 0) { alert('請輸入非零的調整時數（可正可負）'); return }
+    const { from, to } = periodRange
+    if (!from || !to) { alert('請先選好期間'); return }
+    setAdjBusy(true)
+    try {
+      const res = await fetch('/api/hr-store-adj', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ period_start: from, period_end: to, store_cat: adjForm.store, delta_h: delta, reason: adjForm.reason }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data.adjustment) {
+        setStoreAdj(p => [...p, data.adjustment as StoreAdjustment])
+        setAdjForm(f => ({ ...f, delta: '', reason: '' }))
+      } else alert(`❌ 新增失敗：${data.error || res.status}`)
+    } catch (e) {
+      alert(`❌ 失敗：${e instanceof Error ? e.message : '網路錯誤'}`)
+    } finally { setAdjBusy(false) }
+  }, [adjForm, periodRange])
+
+  const delStoreAdj = useCallback(async (id: string) => {
+    setStoreAdj(p => p.filter(a => a.id !== id))
+    try { await fetch(`/api/hr-store-adj?id=${id}`, { method: 'DELETE' }) } catch { /* 樂觀刪除，失敗忽略 */ }
+  }, [])
 
   // 週報視角：基於目前期間 pf 線性外推月底估值
   const monthDays = new Date(year, month, 0).getDate()
@@ -1047,7 +1118,7 @@ export default function HRPage() {
                 { key: 'dept' as ResultTab, label: `門市彙整（${depts.length}）` },
                 { key: 'store' as ResultTab, label: `分店分攤（${storeDist.length}）` },
                 { key: 'crossStore' as ResultTab, label: `跨店明細（${crossStore.filter(r => r.storeCount >= 2).length}）` },
-                { key: 'anom' as ResultTab, label: `異常（${calcResult?.anom.length || 0}）` },
+                { key: 'anom' as ResultTab, label: `異常（${(calcResult?.anom.length || 0) + punchAnom.anomalies.length}）` },
               ]).map(t => (
                 <button key={t.key} onClick={() => setResultTab(t.key)} style={tabStyle(resultTab === t.key)}>
                   {t.label}
@@ -1218,9 +1289,22 @@ export default function HRPage() {
 
                           {/* 總時數 */}
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '6px 0 0', borderTop: '1px solid #e8e6e1' }}>
-                            <span style={{ fontWeight: 600 }}>總時數</span>
+                            <span style={{ fontWeight: 600 }}>{adjByStore[s.cat] ? '系統時數' : '總時數'}</span>
                             <span style={{ fontWeight: 700, color: '#1a2f4e' }}>{s.totalH.toFixed(2)}</span>
                           </div>
+                          {/* C. 手動調整 + 校正後 */}
+                          {!!adjByStore[s.cat] && (
+                            <>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0', color: adjByStore[s.cat] > 0 ? '#059669' : '#dc2626' }}>
+                                <span>手動調整</span>
+                                <span>{adjByStore[s.cat] > 0 ? '+' : ''}{adjByStore[s.cat].toFixed(2)}</span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '4px 0 0', borderTop: '1px dashed #d6d3cd' }}>
+                                <span style={{ fontWeight: 700 }}>校正後總時數</span>
+                                <span style={{ fontWeight: 800, color: '#1a2f4e' }}>{(s.totalH + adjByStore[s.cat]).toFixed(2)}</span>
+                              </div>
+                            </>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1228,9 +1312,13 @@ export default function HRPage() {
                     {/* 一鍵複製文字 / 傳到 LINE */}
                     <div style={{ padding: '0 20px 16px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       <button onClick={() => {
-                        const text = storeDist.map(s =>
-                          `[${s.cat}]\n正職： ${s.ftH.toFixed(2)} (內場 ${s.ftInnerH.toFixed(2)} / 外場 ${s.ftOuterH.toFixed(2)})\n工讀： ${s.ptH.toFixed(2)} (內場 ${s.ptInnerH.toFixed(2)} / 外場 ${s.ptOuterH.toFixed(2)})\n總時數： ${s.totalH.toFixed(2)}`
-                        ).join('\n\n')
+                        const text = storeDist.map(s => {
+                          const adj = adjByStore[s.cat] || 0
+                          const totalLine = adj
+                            ? `系統時數： ${s.totalH.toFixed(2)}\n手動調整： ${adj > 0 ? '+' : ''}${adj.toFixed(2)}\n校正後總時數： ${(s.totalH + adj).toFixed(2)}`
+                            : `總時數： ${s.totalH.toFixed(2)}`
+                          return `[${s.cat}]\n正職： ${s.ftH.toFixed(2)} (內場 ${s.ftInnerH.toFixed(2)} / 外場 ${s.ftOuterH.toFixed(2)})\n工讀： ${s.ptH.toFixed(2)} (內場 ${s.ptInnerH.toFixed(2)} / 外場 ${s.ptOuterH.toFixed(2)})\n${totalLine}`
+                        }).join('\n\n')
                         navigator.clipboard.writeText(text).then(() => alert('已複製到剪貼簿'))
                       }} style={{ padding: '6px 14px', borderRadius: 7, border: '1px solid #e5e7eb', background: '#fff', fontSize: 12, cursor: 'pointer', color: '#374151' }}>
                         📋 複製文字
@@ -1292,6 +1380,44 @@ export default function HRPage() {
                         </tr>
                       </tbody>
                     </table>
+
+                    {/* C. 分店分攤手動調整 — 跨店支援/休息卡打錯店等系統算不準的人工校正 */}
+                    <div style={{ margin: '4px 20px 20px', padding: '14px 16px', background: '#fbfaf7', border: '1px solid #e8e6e1', borderRadius: 10 }}>
+                      <div style={{ fontWeight: 700, color: '#1a2f4e', fontSize: 13, marginBottom: 4 }}>🔧 手動調整（{periodRange.from} ~ {periodRange.to}）</div>
+                      <div style={{ fontSize: 11.5, color: '#9ca3af', marginBottom: 10 }}>
+                        跨店支援、休息卡打錯店等系統算不準的情況，可在這裡針對某間店 +/- 時數。調整只影響「校正後總時數」，會跟著期間自動帶出。
+                      </div>
+
+                      {storeAdj.length > 0 && (
+                        <div style={{ marginBottom: 10 }}>
+                          {storeAdj.map(a => (
+                            <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, padding: '5px 0', borderBottom: '1px solid #f0eee9' }}>
+                              <span style={{ minWidth: 96, fontWeight: 600, color: '#1a2f4e' }}>{a.store_cat}</span>
+                              <span style={{ minWidth: 60, textAlign: 'right', fontWeight: 700, color: a.delta_h > 0 ? '#059669' : '#dc2626' }}>{a.delta_h > 0 ? '+' : ''}{Number(a.delta_h).toFixed(2)}H</span>
+                              <span style={{ flex: 1, color: '#6b7280' }}>{a.reason || '—'}</span>
+                              <button onClick={() => delStoreAdj(a.id)} style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fff', color: '#dc2626', fontSize: 11, cursor: 'pointer' }}>刪除</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <select value={adjForm.store} onChange={e => setAdjForm(f => ({ ...f, store: e.target.value }))}
+                          style={{ padding: '6px 10px', borderRadius: 7, border: '1px solid #e5e7eb', fontSize: 12, background: '#fff' }}>
+                          {['品牌概念店', '料韓男2號店', '料韓男3號店', '英洙家', '其他'].map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                        <input value={adjForm.delta} onChange={e => setAdjForm(f => ({ ...f, delta: e.target.value }))}
+                          placeholder="時數 (例 +9.93 / -8.95)" inputMode="decimal"
+                          style={{ width: 150, padding: '6px 10px', borderRadius: 7, border: '1px solid #e5e7eb', fontSize: 12 }} />
+                        <input value={adjForm.reason} onChange={e => setAdjForm(f => ({ ...f, reason: e.target.value }))}
+                          placeholder="說明 (例 加英洙家支援)"
+                          style={{ flex: 1, minWidth: 160, padding: '6px 10px', borderRadius: 7, border: '1px solid #e5e7eb', fontSize: 12 }} />
+                        <button onClick={addStoreAdj} disabled={adjBusy}
+                          style={{ padding: '6px 16px', borderRadius: 7, border: '1px solid #1a2f4e', background: adjBusy ? '#9ca3af' : '#1a2f4e', color: '#fff', fontSize: 12, fontWeight: 600, cursor: adjBusy ? 'default' : 'pointer' }}>
+                          {adjBusy ? '新增中…' : '＋ 新增調整'}
+                        </button>
+                      </div>
+                    </div>
                   </>
                 )
               )}
@@ -1364,41 +1490,53 @@ export default function HRPage() {
                 })()
               )}
 
-              {resultTab === 'anom' && (
-                (calcResult?.anom.length || 0) === 0 ? (
-                  <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>✓ 無異常</div>
-                ) : (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                    <thead>
-                      <tr style={{ background: '#fafaf8' }}>
-                        {['嚴重度','類型','工號','姓名','日期','說明'].map(h => (
-                          <th key={h} style={{ padding: '9px 12px', textAlign: 'left', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1' }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {calcResult?.anom.map((a, i) => {
-                        const sevBg = a.sev === 'error' ? '#fee2e2' : a.sev === 'warn' ? '#fef3c7' : '#dbeafe'
-                        const sevColor = a.sev === 'error' ? '#dc2626' : a.sev === 'warn' ? '#d97706' : '#2563eb'
-                        return (
-                          <tr key={i} style={{ borderBottom: '1px solid #f0eee9' }}>
-                            <td style={{ padding: '8px 12px' }}>
-                              <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 20, background: sevBg, color: sevColor }}>
-                                {a.sev === 'error' ? '錯誤' : a.sev === 'warn' ? '警告' : '資訊'}
-                              </span>
-                            </td>
-                            <td style={{ padding: '8px 12px' }}>{a.type}</td>
-                            <td style={{ padding: '8px 12px', color: '#9ca3af' }}>{a.id}</td>
-                            <td style={{ padding: '8px 12px', fontWeight: 600 }}>{a.name}</td>
-                            <td style={{ padding: '8px 12px' }}>{a.date}</td>
-                            <td style={{ padding: '8px 12px', color: '#6b7280' }}>{a.detail}</td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+              {resultTab === 'anom' && (() => {
+                // 把基本異常（跨日/無出勤/未建檔）和「可疑打卡」(B) 合併一張表
+                const baseAnom = (calcResult?.anom || []).map(a => ({ ...a, hours: undefined as number | undefined }))
+                const allAnom = [...baseAnom, ...punchAnom.anomalies]
+                if (allAnom.length === 0)
+                  return <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>✓ 無異常</div>
+                return (
+                  <>
+                    {punchAnom.suspectH > 0 && (
+                      <div style={{ margin: '14px 20px 4px', padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 12.5, color: '#92400e' }}>
+                        ⚠️ 可疑打卡共 <b>{punchAnom.anomalies.length}</b> 筆、合計 <b>{punchAnom.suspectH.toFixed(2)}H</b>（跨店/跑腿/休息卡對不上）。
+                        「跑腿打卡」已自動改歸真實分店；「跨店未橋接」「休息卡店別不符」需到分店分攤手動調整。
+                      </div>
+                    )}
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: '#fafaf8' }}>
+                          {['嚴重度','類型','工號','姓名','日期','時數','說明'].map(h => (
+                            <th key={h} style={{ padding: '9px 12px', textAlign: h === '時數' ? 'right' : 'left', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {allAnom.map((a, i) => {
+                          const sevBg = a.sev === 'error' ? '#fee2e2' : a.sev === 'warn' ? '#fef3c7' : '#dbeafe'
+                          const sevColor = a.sev === 'error' ? '#dc2626' : a.sev === 'warn' ? '#d97706' : '#2563eb'
+                          return (
+                            <tr key={i} style={{ borderBottom: '1px solid #f0eee9' }}>
+                              <td style={{ padding: '8px 12px' }}>
+                                <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 20, background: sevBg, color: sevColor }}>
+                                  {a.sev === 'error' ? '錯誤' : a.sev === 'warn' ? '警告' : '資訊'}
+                                </span>
+                              </td>
+                              <td style={{ padding: '8px 12px' }}>{a.type}</td>
+                              <td style={{ padding: '8px 12px', color: '#9ca3af' }}>{a.id}</td>
+                              <td style={{ padding: '8px 12px', fontWeight: 600 }}>{a.name}</td>
+                              <td style={{ padding: '8px 12px' }}>{a.date}</td>
+                              <td style={{ padding: '8px 12px', textAlign: 'right', color: '#6b7280' }}>{a.hours != null ? a.hours.toFixed(2) : '–'}</td>
+                              <td style={{ padding: '8px 12px', color: '#6b7280' }}>{a.detail}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </>
                 )
-              )}
+              })()}
             </div>
           </div>
         </>
