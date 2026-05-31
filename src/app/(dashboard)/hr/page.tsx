@@ -1563,7 +1563,7 @@ export default function HRPage() {
                   <>
                     {punchAnom.suspectH > 0 && (
                       <div style={{ margin: '14px 20px 4px', padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 12.5, color: '#92400e' }}>
-                        ⚠️ 可疑打卡共 <b>{punchAnom.anomalies.length}</b> 筆、合計 <b>{punchAnom.suspectH.toFixed(2)}H</b>（跨店/跑腿/休息卡對不上）。
+                        ⚠️ 可疑打卡共 <b>{punchAnom.anomalies.length}</b> 筆、合計 <b>{punchAnom.suspectH.toFixed(2)}H</b>（跨店/非分店/休息卡對不上）。
                         想修哪一筆，就在右邊「改歸」選對的店按「套用」—— 系統會自動把原本算錯的店扣掉、改歸的店加上，「分店分攤」的校正後總時數會立刻跟著變。
                       </div>
                     )}

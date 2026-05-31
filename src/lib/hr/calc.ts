@@ -1115,11 +1115,11 @@ export function detectPunchAnomalies(
     const inS = mapLocToStore(p.inLoc), outS = mapLocToStore(p.outLoc)
     const breaks = brkByEmpDay[`${p.id}:${p.dateStr}`] || []
 
-    // 1. 跑腿打卡：一端是跑腿/雜項 → 已自動改歸真店（A），仍標記讓人核對
+    // 1. 非分店地點：一端打在非分店的雜務點（買東西/銀行/處理班表）→ 已自動改歸真店（A），仍標記讓人核對
     if (isErrand(p.inLoc) || isErrand(p.outLoc)) {
       const realS = mapLocToStore(resolveStore(p.outLoc, p.inLoc))
       if (realS !== '其他')
-        push('info', '跑腿打卡', p, `${p.inLoc}→${p.outLoc}，已改歸「${realS}」（${p.hours.toFixed(2)}H）`, realS)
+        push('info', '非分店地點', p, `${p.inLoc}→${p.outLoc}，已改歸「${realS}」（${p.hours.toFixed(2)}H）`, realS)
       else
         push('warn', '無法判定店別', p, `${p.inLoc}→${p.outLoc}，無真實分店，全歸「其他」（${p.hours.toFixed(2)}H）`, '其他')
       return
