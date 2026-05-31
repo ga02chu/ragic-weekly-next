@@ -1075,6 +1075,8 @@ function segmentByBreaks(
 // 把會讓「分店分攤」對不準的打卡列自動挑出來，並加總可疑時數（= 手算的「異常打卡」）
 export interface PunchAnomaly extends Anomaly {
   hours: number
+  fromCat?: string   // 這筆時數目前被算到哪間店（逐筆改歸的「來源店」）
+  toCat?: string     // 系統建議改歸的店（下拉預設值；可改）
 }
 
 export function detectPunchAnomalies(
@@ -1102,8 +1104,8 @@ export function detectPunchAnomalies(
 
   const anomalies: PunchAnomaly[] = []
   let suspectH = 0
-  const push = (sev: Anomaly['sev'], type: string, p: LocRecord, detail: string) => {
-    anomalies.push({ sev, type, id: p.id, name: p.name || nameById[p.id] || '', date: p.dateStr, detail, hours: p.hours || 0 })
+  const push = (sev: Anomaly['sev'], type: string, p: LocRecord, detail: string, fromCat?: string, toCat?: string) => {
+    anomalies.push({ sev, type, id: p.id, name: p.name || nameById[p.id] || '', date: p.dateStr, detail, hours: p.hours || 0, fromCat, toCat })
     suspectH += p.hours || 0
   }
 
@@ -1117,9 +1119,9 @@ export function detectPunchAnomalies(
     if (isErrand(p.inLoc) || isErrand(p.outLoc)) {
       const realS = mapLocToStore(resolveStore(p.outLoc, p.inLoc))
       if (realS !== '其他')
-        push('info', '跑腿打卡', p, `${p.inLoc}→${p.outLoc}，已改歸「${realS}」（${p.hours.toFixed(2)}H）`)
+        push('info', '跑腿打卡', p, `${p.inLoc}→${p.outLoc}，已改歸「${realS}」（${p.hours.toFixed(2)}H）`, realS)
       else
-        push('warn', '無法判定店別', p, `${p.inLoc}→${p.outLoc}，無真實分店，全歸「其他」（${p.hours.toFixed(2)}H）`)
+        push('warn', '無法判定店別', p, `${p.inLoc}→${p.outLoc}，無真實分店，全歸「其他」（${p.hours.toFixed(2)}H）`, '其他')
       return
     }
 
@@ -1130,7 +1132,7 @@ export function detectPunchAnomalies(
         return (bs === inS && be === outS) || (bs === outS && be === inS)
       })
       if (!bridged)
-        push('warn', '跨店未橋接', p, `上班@${inS} / 下班@${outS}，無休息卡分界，整段先算「${outS}」（${p.hours.toFixed(2)}H）`)
+        push('warn', '跨店未橋接', p, `上班@${inS} / 下班@${outS}，無休息卡分界，整段先算「${outS}」（${p.hours.toFixed(2)}H）`, outS, inS)
       return
     }
 
@@ -1140,8 +1142,12 @@ export function detectPunchAnomalies(
       const bs = mapLocToStore(b.startLoc || ''), be = mapLocToStore(b.endLoc || '')
       return (b.startLoc && bs !== '其他' && !known.has(bs)) || (b.endLoc && be !== '其他' && !known.has(be))
     })
-    if (oddBreak)
-      push('warn', '休息卡店別不符', p, `上下班@${inS}，但休息卡打在「${(oddBreak.startLoc || oddBreak.endLoc || '').trim()}」（${p.hours.toFixed(2)}H）`)
+    if (oddBreak) {
+      const oddBs = mapLocToStore(oddBreak.startLoc || '')
+      const oddRaw = oddBreak.startLoc && oddBs !== '其他' && !known.has(oddBs) ? oddBreak.startLoc : oddBreak.endLoc
+      const oddStore = mapLocToStore(oddRaw || '')
+      push('warn', '休息卡店別不符', p, `上下班@${inS}，但休息卡打在「${(oddRaw || '').trim()}」（${p.hours.toFixed(2)}H）`, inS, oddStore !== '其他' ? oddStore : undefined)
+    }
   })
 
   const ord: Record<Anomaly['sev'], number> = { error: 0, warn: 1, info: 2 }

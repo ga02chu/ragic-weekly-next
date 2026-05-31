@@ -22,8 +22,15 @@ interface StoreAdjustment {
   id: string
   period_start: string
   period_end: string
-  store_cat: string
+  kind?: 'manual' | 'reassign'
+  store_cat: string | null
   delta_h: number
+  // reassign 用
+  from_cat?: string | null
+  to_cat?: string | null
+  emp_id?: string | null
+  emp_name?: string | null
+  src_date?: string | null
   reason: string
   created_at?: string
   created_by?: string | null
@@ -373,6 +380,9 @@ export default function HRPage() {
   const [storeAdj, setStoreAdj] = useState<StoreAdjustment[]>([])
   const [adjForm, setAdjForm] = useState<{ store: string; delta: string; reason: string }>({ store: '品牌概念店', delta: '', reason: '' })
   const [adjBusy, setAdjBusy] = useState(false)
+  // 異常分頁「逐筆改歸」：每列下拉選的目標店、套用中的列
+  const [reassignSel, setReassignSel] = useState<Record<string, string>>({})
+  const [reassignBusy, setReassignBusy] = useState('')
   const [crossOnly, setCrossOnly] = useState(true)
   const [crossFtOnly, setCrossFtOnly] = useState(true)
   const [computing, setComputing] = useState(false)
@@ -593,9 +603,29 @@ export default function HRPage() {
   }, [periodRange])
 
   // 各店調整加總（給分店分攤表用）
+  // manual：store_cat += delta_h（可正可負）；reassign：from_cat −H、to_cat +H
   const adjByStore = useMemo(() => {
     const m: Record<string, number> = {}
-    storeAdj.forEach(a => { m[a.store_cat] = (m[a.store_cat] || 0) + (Number(a.delta_h) || 0) })
+    storeAdj.forEach(a => {
+      const d = Number(a.delta_h) || 0
+      if (a.kind === 'reassign') {
+        const h = Math.abs(d)
+        if (a.from_cat) m[a.from_cat] = (m[a.from_cat] || 0) - h
+        if (a.to_cat) m[a.to_cat] = (m[a.to_cat] || 0) + h
+      } else if (a.store_cat) {
+        m[a.store_cat] = (m[a.store_cat] || 0) + d
+      }
+    })
+    return m
+  }, [storeAdj])
+
+  // 逐筆改歸：用 (工號|日期|來源店) 當 key，方便異常列判斷「已套用」與復原
+  const reassignByKey = useMemo(() => {
+    const m: Record<string, StoreAdjustment> = {}
+    storeAdj.forEach(a => {
+      if (a.kind === 'reassign' && a.emp_id && a.src_date && a.from_cat)
+        m[`${a.emp_id}|${a.src_date}|${a.from_cat}`] = a
+    })
     return m
   }, [storeAdj])
 
@@ -625,6 +655,33 @@ export default function HRPage() {
     setStoreAdj(p => p.filter(a => a.id !== id))
     try { await fetch(`/api/hr-store-adj?id=${id}`, { method: 'DELETE' }) } catch { /* 樂觀刪除，失敗忽略 */ }
   }, [])
+
+  // 異常分頁逐筆改歸：把某人某筆 H 從 fromCat 改歸 toCat（系統自動 from −H / to +H）
+  const applyReassign = useCallback(async (a: PunchAnomaly, toCat: string) => {
+    if (!a.fromCat || !a.hours) return
+    if (toCat === a.fromCat) { alert('改歸的店不能跟原本同一間'); return }
+    const { from, to } = periodRange
+    if (!from || !to) { alert('請先選好期間'); return }
+    const rk = `${a.id}|${a.date}|${a.fromCat}`
+    setReassignBusy(rk)
+    try {
+      const res = await fetch('/api/hr-store-adj', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'reassign', period_start: from, period_end: to,
+          from_cat: a.fromCat, to_cat: toCat, delta_h: Math.abs(a.hours),
+          emp_id: a.id, emp_name: a.name, src_date: a.date,
+          reason: `${a.name} ${a.date} ${a.type}：${a.fromCat}→${toCat} ${Math.abs(a.hours).toFixed(2)}H`,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data.adjustment) setStoreAdj(p => [...p, data.adjustment as StoreAdjustment])
+      else alert(`❌ 改歸失敗：${data.error || res.status}`)
+    } catch (e) {
+      alert(`❌ 失敗：${e instanceof Error ? e.message : '網路錯誤'}`)
+    } finally { setReassignBusy('') }
+  }, [periodRange])
 
   // 週報視角：基於目前期間 pf 線性外推月底估值
   const monthDays = new Date(year, month, 0).getDate()
@@ -1386,18 +1443,23 @@ export default function HRPage() {
                       <div style={{ fontWeight: 700, color: '#1a2f4e', fontSize: 13, marginBottom: 4 }}>🔧 手動調整（{periodRange.from} ~ {periodRange.to}）</div>
                       <div style={{ fontSize: 11.5, color: '#9ca3af', marginBottom: 10 }}>
                         跨店支援、休息卡打錯店等系統算不準的情況，可在這裡針對某間店 +/- 時數。調整只影響「校正後總時數」，會跟著期間自動帶出。
+                        逐筆改歸（標 🔁）是從「異常」分頁套用的個人校正，也會列在這裡。
                       </div>
 
                       {storeAdj.length > 0 && (
                         <div style={{ marginBottom: 10 }}>
-                          {storeAdj.map(a => (
-                            <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, padding: '5px 0', borderBottom: '1px solid #f0eee9' }}>
-                              <span style={{ minWidth: 96, fontWeight: 600, color: '#1a2f4e' }}>{a.store_cat}</span>
-                              <span style={{ minWidth: 60, textAlign: 'right', fontWeight: 700, color: a.delta_h > 0 ? '#059669' : '#dc2626' }}>{a.delta_h > 0 ? '+' : ''}{Number(a.delta_h).toFixed(2)}H</span>
-                              <span style={{ flex: 1, color: '#6b7280' }}>{a.reason || '—'}</span>
-                              <button onClick={() => delStoreAdj(a.id)} style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fff', color: '#dc2626', fontSize: 11, cursor: 'pointer' }}>刪除</button>
-                            </div>
-                          ))}
+                          {storeAdj.map(a => {
+                            const isRe = a.kind === 'reassign'
+                            const h = Number(a.delta_h) || 0
+                            return (
+                              <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, padding: '5px 0', borderBottom: '1px solid #f0eee9' }}>
+                                <span style={{ minWidth: 116, fontWeight: 600, color: '#1a2f4e' }}>{isRe ? `🔁 ${a.from_cat}→${a.to_cat}` : a.store_cat}</span>
+                                <span style={{ minWidth: 64, textAlign: 'right', fontWeight: 700, color: isRe ? '#1a2f4e' : (h > 0 ? '#059669' : '#dc2626') }}>{isRe ? `${Math.abs(h).toFixed(2)}H` : `${h > 0 ? '+' : ''}${h.toFixed(2)}H`}</span>
+                                <span style={{ flex: 1, color: '#6b7280' }}>{a.reason || '—'}</span>
+                                <button onClick={() => delStoreAdj(a.id)} style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fff', color: '#dc2626', fontSize: 11, cursor: 'pointer' }}>刪除</button>
+                              </div>
+                            )
+                          })}
                         </div>
                       )}
 
@@ -1492,7 +1554,8 @@ export default function HRPage() {
 
               {resultTab === 'anom' && (() => {
                 // 把基本異常（跨日/無出勤/未建檔）和「可疑打卡」(B) 合併一張表
-                const baseAnom = (calcResult?.anom || []).map(a => ({ ...a, hours: undefined as number | undefined }))
+                const STORES = ['品牌概念店', '料韓男2號店', '料韓男3號店', '英洙家', '其他']
+                const baseAnom = (calcResult?.anom || []).map(a => ({ ...a, hours: undefined as number | undefined, fromCat: undefined as string | undefined, toCat: undefined as string | undefined }))
                 const allAnom = [...baseAnom, ...punchAnom.anomalies]
                 if (allAnom.length === 0)
                   return <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>✓ 無異常</div>
@@ -1501,13 +1564,13 @@ export default function HRPage() {
                     {punchAnom.suspectH > 0 && (
                       <div style={{ margin: '14px 20px 4px', padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 12.5, color: '#92400e' }}>
                         ⚠️ 可疑打卡共 <b>{punchAnom.anomalies.length}</b> 筆、合計 <b>{punchAnom.suspectH.toFixed(2)}H</b>（跨店/跑腿/休息卡對不上）。
-                        「跑腿打卡」已自動改歸真實分店；「跨店未橋接」「休息卡店別不符」需到分店分攤手動調整。
+                        想修哪一筆，就在右邊「改歸」選對的店按「套用」—— 系統會自動把原本算錯的店扣掉、改歸的店加上，「分店分攤」的校正後總時數會立刻跟著變。
                       </div>
                     )}
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                       <thead>
                         <tr style={{ background: '#fafaf8' }}>
-                          {['嚴重度','類型','工號','姓名','日期','時數','說明'].map(h => (
+                          {['嚴重度','類型','工號','姓名','日期','時數','說明','改歸'].map(h => (
                             <th key={h} style={{ padding: '9px 12px', textAlign: h === '時數' ? 'right' : 'left', color: '#6b7280', fontWeight: 600, borderBottom: '1.5px solid #e8e6e1' }}>{h}</th>
                           ))}
                         </tr>
@@ -1516,6 +1579,10 @@ export default function HRPage() {
                         {allAnom.map((a, i) => {
                           const sevBg = a.sev === 'error' ? '#fee2e2' : a.sev === 'warn' ? '#fef3c7' : '#dbeafe'
                           const sevColor = a.sev === 'error' ? '#dc2626' : a.sev === 'warn' ? '#d97706' : '#2563eb'
+                          const canReassign = !!a.fromCat && !!a.hours
+                          const rk = `${a.id}|${a.date}|${a.fromCat}`
+                          const applied = canReassign ? reassignByKey[rk] : undefined
+                          const sel = reassignSel[rk] ?? (a.toCat && a.toCat !== a.fromCat ? a.toCat : STORES.find(c => c !== a.fromCat)!)
                           return (
                             <tr key={i} style={{ borderBottom: '1px solid #f0eee9' }}>
                               <td style={{ padding: '8px 12px' }}>
@@ -1529,6 +1596,29 @@ export default function HRPage() {
                               <td style={{ padding: '8px 12px' }}>{a.date}</td>
                               <td style={{ padding: '8px 12px', textAlign: 'right', color: '#6b7280' }}>{a.hours != null ? a.hours.toFixed(2) : '–'}</td>
                               <td style={{ padding: '8px 12px', color: '#6b7280' }}>{a.detail}</td>
+                              <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
+                                {!canReassign ? (
+                                  <span style={{ color: '#d1d5db' }}>—</span>
+                                ) : applied ? (
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                    <span style={{ color: '#059669', fontWeight: 700 }}>→ {applied.to_cat} ✓</span>
+                                    <button onClick={() => delStoreAdj(applied.id)}
+                                      style={{ padding: '2px 8px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fff', color: '#dc2626', fontSize: 11, cursor: 'pointer' }}>復原</button>
+                                  </span>
+                                ) : (
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                    <span style={{ color: '#9ca3af' }}>{a.fromCat}→</span>
+                                    <select value={sel} onChange={e => setReassignSel(s => ({ ...s, [rk]: e.target.value }))}
+                                      style={{ padding: '3px 6px', borderRadius: 6, border: '1px solid #e5e7eb', fontSize: 11, background: '#fff' }}>
+                                      {STORES.filter(c => c !== a.fromCat).map(c => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                    <button disabled={reassignBusy === rk} onClick={() => applyReassign(a as PunchAnomaly, sel)}
+                                      style={{ padding: '3px 10px', borderRadius: 6, border: '1px solid #1a2f4e', background: reassignBusy === rk ? '#9ca3af' : '#1a2f4e', color: '#fff', fontSize: 11, fontWeight: 600, cursor: reassignBusy === rk ? 'default' : 'pointer' }}>
+                                      {reassignBusy === rk ? '…' : '套用'}
+                                    </button>
+                                  </span>
+                                )}
+                              </td>
                             </tr>
                           )
                         })}
