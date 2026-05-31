@@ -26,6 +26,16 @@ create table if not exists hr_store_adjustments (
   created_by   text
 );
 
+-- 若表早已存在（舊版只有 manual 欄位），create if not exists 會整個跳過，
+-- 故用 add column if not exists 補欄位，並放寬 store_cat（reassign 不填）
+alter table hr_store_adjustments add column if not exists kind text not null default 'manual';
+alter table hr_store_adjustments add column if not exists from_cat text;
+alter table hr_store_adjustments add column if not exists to_cat text;
+alter table hr_store_adjustments add column if not exists emp_id text;
+alter table hr_store_adjustments add column if not exists emp_name text;
+alter table hr_store_adjustments add column if not exists src_date text;
+alter table hr_store_adjustments alter column store_cat drop not null;
+
 create index if not exists hr_store_adj_period_idx
   on hr_store_adjustments (period_start, period_end);
 
