@@ -116,7 +116,8 @@ export default function DashboardPage() {
     byStore: { cat: string; totalCost: number }[]
   }
   const [foodCost, setFoodCost] = useState<FoodCostData | null>(null)
-  const [hrSnapshot, setHrSnapshot] = useState<HRSnapshot | null>(null)
+  // 存「全部」快照，再依目前選的期間自動挑最吻合的那張（見下方 hrSnapshot useMemo）
+  const [hrSnapshots, setHrSnapshots] = useState<HRSnapshot[]>([])
 
   useEffect(() => {
     fetch('/api/food-cost').then(r => r.ok ? r.json() : null).then(d => {
@@ -126,26 +127,25 @@ export default function DashboardPage() {
     // 先讀 localStorage（自己的）→ 立即顯示
     try {
       const raw = localStorage.getItem('hr_last_result')
-      if (raw) setHrSnapshot(JSON.parse(raw))
+      if (raw) setHrSnapshots([JSON.parse(raw)])
     } catch { /* ignore */ }
-    // 再從 Supabase 拉最新（跨用戶共享）→ 蓋掉本機版本
+    // 再從 Supabase 拉「全部」快照（跨用戶共享）→ 蓋掉本機版本
     fetch('/api/hr-snapshot')
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         const list = d?.snapshots
         if (!Array.isArray(list) || list.length === 0) return
-        const latest = list[0]
-        const normalized: HRSnapshot = {
-          calcAt: new Date(latest.calc_at).getTime(),
-          year: latest.year,
-          month: latest.month,
-          viewMode: latest.view_mode || 'month',
-          dateFrom: latest.date_from || '',
-          dateTo: latest.date_to || '',
-          totalCost: Number(latest.total_cost) || 0,
-          byStore: Array.isArray(latest.by_store) ? latest.by_store : [],
-        }
-        setHrSnapshot(normalized)
+        const normalized: HRSnapshot[] = list.map((s: Record<string, unknown>) => ({
+          calcAt: new Date(s.calc_at as string).getTime(),
+          year: s.year as number,
+          month: s.month as number,
+          viewMode: (s.view_mode as string) || 'month',
+          dateFrom: (s.date_from as string) || '',
+          dateTo: (s.date_to as string) || '',
+          totalCost: Number(s.total_cost) || 0,
+          byStore: Array.isArray(s.by_store) ? (s.by_store as { cat: string; totalCost: number }[]) : [],
+        }))
+        setHrSnapshots(normalized)
       }).catch(() => { /* ignore */ })
   }, [])
 
@@ -285,6 +285,41 @@ export default function DashboardPage() {
     }
     return { usage: Math.max(0, begin + purTotal - end), staffMeal }
   }
+
+  // 快照的實際涵蓋期間（月模式 → 整月；週模式 → date_from/to）
+  const snapPeriod = (s: HRSnapshot): { from: string; to: string } => {
+    if (s.viewMode === 'month') {
+      const pad = (n: number) => String(n).padStart(2, '0')
+      const last = new Date(s.year, s.month, 0).getDate()
+      return { from: `${s.year}-${pad(s.month)}-01`, to: `${s.year}-${pad(s.month)}-${pad(last)}` }
+    }
+    return { from: s.dateFrom, to: s.dateTo }
+  }
+
+  // 從全部快照中挑「跟目前選的期間最吻合」的一張：
+  // 分數 = 涵蓋度(重疊/選取天數) × 貼合度(重疊/快照天數)，取最高。
+  // 這樣選「上週」時，正好那週的週快照會贏過整月快照（不會被 ÷30 攤稀）；
+  // 選「本月」時則換整月快照勝出。完全不重疊就退回最新一張。
+  const hrSnapshot = useMemo<HRSnapshot | null>(() => {
+    if (hrSnapshots.length === 0) return null
+    if (!dateFrom || !dateTo) return hrSnapshots[0]
+    const selDays = daysBetween(dateFrom, dateTo)
+    let best: HRSnapshot | null = null, bestScore = -1
+    for (const s of hrSnapshots) {
+      const p = snapPeriod(s)
+      if (!p.from || !p.to) continue
+      const oFrom = dateFrom > p.from ? dateFrom : p.from
+      const oTo = dateTo < p.to ? dateTo : p.to
+      if (oFrom > oTo) continue
+      const overlap = daysBetween(oFrom, oTo)
+      const snapDays = daysBetween(p.from, p.to)
+      const score = (selDays > 0 ? overlap / selDays : 0) * (snapDays > 0 ? overlap / snapDays : 0)
+      if (score > bestScore + 1e-9 || (Math.abs(score - bestScore) < 1e-9 && best && s.calcAt > best.calcAt)) {
+        bestScore = score; best = s
+      }
+    }
+    return best || hrSnapshots[0]
+  }, [hrSnapshots, dateFrom, dateTo])
 
   // HR snapshot 按日攤算
   const hrProration = useMemo(() => {
