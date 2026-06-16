@@ -458,8 +458,11 @@ export default function HRPage() {
       } else {
         // 週報模式：日期空時預設「本月 1 號到今天」
         const today = new Date()
-        let s = dateFrom ? new Date(dateFrom) : monthStart
-        let e = dateTo ? new Date(dateTo) : (today < monthEnd ? today : monthEnd)
+        // 用「本地時間」解析日期字串：new Date('2026-06-08') 會被當成 UTC 半夜
+        // （台灣 +8 即早上 8 點），導致該日打卡（存成本地半夜的 UTC）被擋在期間外，
+        // 整個週報的第一天會被漏算。補 T00:00:00 / T23:59:59 確保整天涵蓋。
+        let s = dateFrom ? new Date(dateFrom + 'T00:00:00') : monthStart
+        let e = dateTo ? new Date(dateTo + 'T23:59:59') : (today < monthEnd ? today : monthEnd)
         // 裁切到選定月份：避免跨月範圍使 pf 被夾為 1
         if (s < monthStart) s = monthStart
         if (e > monthEnd) e = monthEnd
