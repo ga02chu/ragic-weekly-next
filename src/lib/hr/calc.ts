@@ -834,7 +834,7 @@ export function adjDeltaForMonth(
 // ── mapLocToStore ──────────────────────────────────────────────────────────
 export const STORE_CATS = ['品牌概念店', '料韓男2號店', '料韓男3號店', '英洙家', '其他']
 
-function mapLocToStore(locName: string): string {
+export function mapLocToStore(locName: string): string {
   if (!locName) return '其他'
   const l = locName.replace(/\s/g, '')
   if (l.includes('品牌') && l.includes('概念')) return '品牌概念店'

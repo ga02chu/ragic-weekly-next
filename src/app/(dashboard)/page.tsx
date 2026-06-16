@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import { toISO, fmt } from '@/lib/ragic/utils'
 import { processRecords, filterByStoreType, StoreRecord } from '@/lib/ragic/processRecords'
 import { fetchAllRecords, getFields } from '@/lib/ragic/fetchRecords'
+import { mapLocToStore } from '@/lib/hr/calc'
 
 const RevenueAreaChart = dynamic(
   () => import('recharts').then(({ AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer }) =>
@@ -439,7 +440,11 @@ export default function DashboardPage() {
                     const fc = computeFood(storeSet)
                     const fRatio = s.rev > 0 ? fc.usage / s.rev * 100 : 0
                     const smRatio = s.rev > 0 ? fc.staffMeal / s.rev * 100 : 0
-                    const hrStore = hrSnapshot?.byStore.find(b => b.cat === sName || sName.includes(b.cat) || b.cat.includes(sName))
+                    // 總覽店名（如「2號店(明曜店)」）與 HR 分類（如「料韓男2號店」）名稱不同，
+                    // 先用 HR 的歸店規則把店名正規化成分類再配對；'其他'/加盟店不配（避免誤抓）。
+                    const sCat = mapLocToStore(sName)
+                    const hrStore = hrSnapshot?.byStore.find(b =>
+                      (sCat !== '其他' && b.cat === sCat) || b.cat === sName || sName.includes(b.cat) || b.cat.includes(sName))
                     const hrCost = hrStore && hrProration ? Math.round(hrStore.totalCost * hrProration.ratio) : 0
                     const hrR = s.rev > 0 ? hrCost / s.rev * 100 : 0
                     const totalR = fRatio + hrR
