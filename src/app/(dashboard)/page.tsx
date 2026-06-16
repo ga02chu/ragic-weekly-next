@@ -214,6 +214,8 @@ export default function DashboardPage() {
 
   const totalRev = Object.values(filtered).reduce((s, v) => s + v.rev, 0)
   const prevTotalRev = Object.values(prevFiltered).reduce((s, v) => s + v.rev, 0)
+  // 人事成本只涵蓋直營店，故人事率分母只用「直營營業額」（排除加盟，分子分母同口徑）
+  const directRev = Object.values(filtered).reduce((s, v) => s + (v.type === 'direct' ? v.rev : 0), 0)
   const totalGuests = Object.values(filtered).reduce((s, v) => s + v.guests, 0)
   const prevTotalGuests = Object.values(prevFiltered).reduce((s, v) => s + v.guests, 0)
   const totalGroups = Object.values(filtered).reduce((s, v) => s + v.groups, 0)
@@ -349,7 +351,7 @@ export default function DashboardPage() {
   const foodRatio = totalRev > 0 ? foodOverall.usage / totalRev * 100 : 0
   const staffMealRatio = totalRev > 0 ? foodOverall.staffMeal / totalRev * 100 : 0
   const hrCostProrated = hrSnapshot && hrProration ? hrSnapshot.totalCost * hrProration.ratio : 0
-  const hrRatio = totalRev > 0 && hrCostProrated > 0 ? hrCostProrated / totalRev * 100 : 0
+  const hrRatio = directRev > 0 && hrCostProrated > 0 ? hrCostProrated / directRev * 100 : 0
 
   const trendData = dateEntries.map(([date, rev]) => ({ date: date.slice(5), rev }))
   const donutData = storeList.map(([, s]) => ({ name: s.displayName, value: s.rev }))
@@ -451,7 +453,7 @@ export default function DashboardPage() {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
               <RatioCard label="食材成本比例" value={foodCost ? foodRatio : null} sub="食材使用 / 營業額" thresholds={{ green: 30, amber: 35 }} href="/food-cost" />
-              <RatioCard label="人事成本比例" value={hrSnapshot && hrCostProrated > 0 && totalRev > 0 ? hrRatio : null} sub={hrSnapshot ? `人事支出 / 營業額 · ${hrProration?.overlapDays || 0}/${hrProration?.hrDays || 0} 天` : '未計算 → 點此前往 HR'} thresholds={{ green: 35, amber: 40 }} href="/hr" />
+              <RatioCard label="人事成本比例" value={hrSnapshot && hrCostProrated > 0 && directRev > 0 ? hrRatio : null} sub={hrSnapshot ? `人事支出 / 直營營業額 · ${hrProration?.overlapDays || 0}/${hrProration?.hrDays || 0} 天` : '未計算 → 點此前往 HR'} thresholds={{ green: 35, amber: 40 }} href="/hr" />
               <RatioCard label="員工餐比例" value={foodCost ? staffMealRatio : null} sub="員工餐 / 營業額（已從食材成本扣除）" thresholds={{ green: 2, amber: 3 }} href="/food-cost" />
             </div>
           </div>
@@ -504,9 +506,9 @@ export default function DashboardPage() {
                     <td style={{ ...tdNum, color: '#1a2f4e' }}>{foodCost ? `$${fmt(foodOverall.usage)}` : '—'}</td>
                     <td style={tdNum}>{foodCost && totalRev > 0 ? <Pill v={foodRatio} g={30} a={35} /> : '—'}</td>
                     <td style={{ ...tdNum, color: '#1a2f4e' }}>{hrSnapshot && hrCostProrated > 0 ? `$${fmt(Math.round(hrCostProrated))}` : '—'}</td>
-                    <td style={tdNum}>{hrSnapshot && hrCostProrated > 0 && totalRev > 0 ? <Pill v={hrRatio} g={35} a={40} /> : '—'}</td>
+                    <td style={tdNum}>{hrSnapshot && hrCostProrated > 0 && directRev > 0 ? <Pill v={hrRatio} g={35} a={40} /> : '—'}</td>
                     <td style={tdNum}>{foodCost && totalRev > 0 ? <Pill v={staffMealRatio} g={2} a={3} /> : '—'}</td>
-                    <td style={tdNum}>{foodCost && hrSnapshot && hrCostProrated > 0 && totalRev > 0 ? <Pill v={foodRatio + hrRatio} g={65} a={75} /> : '—'}</td>
+                    <td style={tdNum}>{foodCost && hrSnapshot && hrCostProrated > 0 && directRev > 0 ? <Pill v={foodRatio + hrRatio} g={65} a={75} /> : '—'}</td>
                   </tr>
                 </tfoot>
               </table>
