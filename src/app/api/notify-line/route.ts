@@ -51,13 +51,21 @@ export async function POST(request: NextRequest) {
   if (!body?.storeDist || !Array.isArray(body.storeDist)) {
     return NextResponse.json({ error: 'Missing storeDist' }, { status: 400 })
   }
-  const token = process.env.LINE_CHANNEL_ACCESS_TOKEN
-  const groupId = process.env.LINE_GROUP_ID
+  // 週報推播改用「料秘書」店鋪 OA（GA秘書額度已滿）；
+  // 兩個 company env 都有才切換，否則退回原本的 GA秘書設定。
+  const useCompany =
+    !!process.env.LINE_CHANNEL_ACCESS_TOKEN_COMPANY && !!process.env.WEEKLY_REPORT_GROUP_ID
+  const token = useCompany
+    ? process.env.LINE_CHANNEL_ACCESS_TOKEN_COMPANY
+    : process.env.LINE_CHANNEL_ACCESS_TOKEN
+  const groupId = useCompany
+    ? process.env.WEEKLY_REPORT_GROUP_ID
+    : process.env.LINE_GROUP_ID
   if (!token) {
-    return NextResponse.json({ error: '未設定 LINE_CHANNEL_ACCESS_TOKEN' }, { status: 500 })
+    return NextResponse.json({ error: '未設定 LINE access token' }, { status: 500 })
   }
   if (!groupId) {
-    return NextResponse.json({ error: '未設定 LINE_GROUP_ID（請先到群組傳「id」取得，再設到 Vercel env）' }, { status: 500 })
+    return NextResponse.json({ error: '未設定週報群組（WEEKLY_REPORT_GROUP_ID / LINE_GROUP_ID）' }, { status: 500 })
   }
 
   const text = formatStoreDistText(body.storeDist, body.period, body.viewMode || 'week')
