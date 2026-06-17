@@ -6,16 +6,14 @@ import { getMonthlyStdH, fetchAllRecords, getFields } from '@/lib/ragic/fetchRec
 import { processRecords } from '@/lib/ragic/processRecords'
 import { fmt } from '@/lib/ragic/utils'
 import {
-  parsePay, parseAtt, parseLoc, parseAdj, parseBreak, buildBreakMap,
-  adjDeltaForMonth, adjExtrasForMonth, empPfForMonth, calcResults, computeStoreDist, computeCrossStoreDetail,
-  detectPunchAnomalies,
-  holidayPayForMonth, compHoursIdMap, latePenaltyForMonth, birthdayBonusForMonth,
-  foreignerIdsFromNames, mergeExtras, emptyAdj, adjTargetMonth,
-  deriveTitleLoc,
+  parsePay, parseAtt, parseLoc, parseAdj, parseBreak,
+  computeStoreDist, computeCrossStoreDetail, detectPunchAnomalies,
+  emptyAdj, adjTargetMonth, deriveTitleLoc,
   fT, fH,
   type HREmployee, type AttResult, type LocRecord, type BreakRecord, type CalcResult,
   type ParsedAdjustments, type PunchAnomaly,
 } from '@/lib/hr/calc'
+import { computeHr, detectPeriod } from '@/lib/hr/computeSnapshot'
 
 
 interface StoreAdjustment {
@@ -388,6 +386,10 @@ export default function HRPage() {
   const [computing, setComputing] = useState(false)
   const [compErr, setCompErr] = useState('')
 
+  // 標記「使用者剛上傳過」→ 觸發自動計算存快照（避免進場讀雲端時也誤觸發）
+  const dirtyRef = useRef(false)
+  const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const handleFile = useCallback(async (key: FileKey, file: File) => {
     setParseErr(prev => ({ ...prev, [key]: '' }))
     setFileStatus(prev => ({ ...prev, [key]: 'parsing' }))
@@ -403,6 +405,7 @@ export default function HRPage() {
       setFileStatus(prev => ({ ...prev, [key]: 'loaded' }))
       const meta: FileMeta = { name: file.name, size: file.size, uploadedAt: Date.now() }
       setFileMeta(prev => ({ ...prev, [key]: meta }))
+      dirtyRef.current = true   // 觸發下方「上傳後自動計算」effect
       try {
         localStorage.setItem(`hr_data_${key}`, JSON.stringify(parsed))
         localStorage.setItem(`hr_meta_${key}`, JSON.stringify(meta))
@@ -448,75 +451,12 @@ export default function HRPage() {
     if (!pay.length || !att) { setCompErr('請先上傳薪資表與出勤記錄'); return }
     setComputing(true); setCompErr('')
     try {
-      const monthStart = new Date(year, month - 1, 1)
-      const monthEnd = new Date(year, month, 0)
-      const totalDays = monthEnd.getDate()
-      let sDate: Date, eDate: Date, pf: number
-
-      if (viewMode === 'month') {
-        sDate = monthStart; eDate = monthEnd; pf = 1
-      } else {
-        // 週報模式：日期空時預設「本月 1 號到今天」
-        const today = new Date()
-        // 用「本地時間」解析日期字串：new Date('2026-06-08') 會被當成 UTC 半夜
-        // （台灣 +8 即早上 8 點），導致該日打卡（存成本地半夜的 UTC）被擋在期間外，
-        // 整個週報的第一天會被漏算。補 T00:00:00 / T23:59:59 確保整天涵蓋。
-        let s = dateFrom ? new Date(dateFrom + 'T00:00:00') : monthStart
-        let e = dateTo ? new Date(dateTo + 'T23:59:59') : (today < monthEnd ? today : monthEnd)
-        // 裁切到選定月份：避免跨月範圍使 pf 被夾為 1
-        if (s < monthStart) s = monthStart
-        if (e > monthEnd) e = monthEnd
-        sDate = s; eDate = e
-        if (eDate < sDate) { sDate = monthStart; eDate = monthEnd }
-        const periodDays = Math.round((eDate.getTime() - sDate.getTime()) / 86400000) + 1
-        pf = Math.min(1, Math.max(0.01, periodDays / totalDays))
-      }
-
-      const adjMap = adjDeltaForMonth(year, month, adj.records, pay)
-
-      // 判斷調整表是哪個月，與計算月份不符時不套用月份敏感的加扣項
-      const adjTM = adjTargetMonth(adj)
-      const adjMonthMatches = !adjTM || (adjTM.year === year && adjTM.month === month)
-
-      // 把所有來源的 extras 全部 merge 在一起
-      const breakMap = buildBreakMap(brk)
-      const lateRes = adjMonthMatches ? latePenaltyForMonth(adj.lates, pay) : { extras: { extras: {}, details: {} }, ptZeroIds: new Set<string>() }
-      // 國定假日加給：限制在當前計算月（避免跨月區間誤套到別月的清明等）
-      const holidaysInMonth = adjMonthMatches
-        ? adj.holidays.filter(h => h.date && h.date.getFullYear() === year && h.date.getMonth() + 1 === month)
-        : []
-      const merged = mergeExtras(
-        // 舊：att 的加扣項
-        { extras: att.extras || {}, details: att.extrasDetail || {} },
-        // 調整表 其他加扣（月份對才套）
-        adjMonthMatches
-          ? (adjExtrasForMonth(adj.records, pay) as { extras: Record<string, number>; details: Record<string, { code: string; desc: string; amt: number; note: string }[]> })
-          : { extras: {}, details: {} },
-        // 國定假日加給（已過濾到當前月）
-        holidayPayForMonth(holidaysInMonth, pay, att, breakMap),
-        // 遲到扣考績（FT）
-        lateRes.extras,
-        // 生日禮金
-        birthdayBonusForMonth(year, month, pay),
-      )
-      const mergedAtt: AttResult = { ...att, extras: merged.extras, extrasDetail: merged.details }
-
-      // 新進/離職的個別比例
-      const empPfMap = empPfForMonth(year, month, adj.records, pay)
-
-      // 外籍員工 id set
-      const foreignerIds = foreignerIdsFromNames(adj.foreigners, pay)
-
-      // 加班換補休：傳 id map 進 calcResults 內，依實際 otH 扣（沒加班費就不扣）
-      // 月份不符時不套用
-      const compHIdM = adjMonthMatches ? compHoursIdMap(adj.compHours, pay) : {}
-
-      const result = calcResults(
-        sDate, eDate, storeFilter, stdH, pf, adjMap, excludeMgmt, locFilter,
-        pay, mergedAtt, loc, {}, breakMap, empPfMap, foreignerIds, lateRes.ptZeroIds, compHIdM,
-      )
+      // 計算核心抽到 computeHr（與「上傳後自動計算」共用同一份，數字零漂移）
+      const { result, dist } = computeHr({
+        pay, att, loc, adj, brk, year, month, viewMode, dateFrom, dateTo,
+        stdH, storeFilter, excludeMgmt, locFilter,
+      })
       setCalcResult(result)
-      const dist = computeStoreDist(result.results, result.locR, brk)
       setStoreDist(dist)
       setCrossStore(computeCrossStoreDetail(result.results, result.locR, brk))
       setPunchAnom(detectPunchAnomalies(result.locR, brk, result.results))
@@ -574,6 +514,44 @@ export default function HRPage() {
     }
     setComputing(false)
   }, [pay, att, loc, adj, brk, year, month, viewMode, dateFrom, dateTo, storeFilter, stdH, excludeMgmt, locFilter])
+
+  // 把一張快照 POST 到雲端（給總覽等頁面讀）
+  const postSnapshot = useCallback(async (
+    p: { year: number; month: number; viewMode: ViewMode; dateFrom: string | null; dateTo: string | null },
+    dist: ReturnType<typeof computeStoreDist>,
+  ) => {
+    await fetch('/api/hr-snapshot', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        year: p.year, month: p.month, view_mode: p.viewMode,
+        date_from: p.dateFrom, date_to: p.dateTo,
+        total_cost: dist.reduce((s, d) => s + d.totalCost, 0),
+        by_store: dist.map(d => ({ cat: d.cat, totalCost: d.totalCost })),
+        calc_at: new Date().toISOString(),
+      }),
+    }).catch(() => { /* 失敗忽略，不影響上傳 */ })
+  }, [])
+
+  // 上傳後自動計算並存快照（月 + 資料實際週區間），全站直接拿最新值，免按「開始計算」。
+  // 用資料自身偵測到的月份/區間 + 該月 stdH 計算，與 HR 頁口徑一致。
+  useEffect(() => {
+    if (!dirtyRef.current || !pay.length || !att) return
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current)
+    autoSaveTimer.current = setTimeout(() => {
+      try {
+        const per = detectPeriod(att)
+        if (!per) return
+        const base = { pay, att, loc, adj, brk, stdH: getMonthlyStdH(per.year, per.month) }
+        // 月快照（pf=1）
+        const mDist = computeHr({ ...base, year: per.year, month: per.month, viewMode: 'month' }).dist
+        postSnapshot({ year: per.year, month: per.month, viewMode: 'month', dateFrom: null, dateTo: null }, mDist)
+        // 週快照（資料實際涵蓋區間）
+        const wDist = computeHr({ ...base, year: per.year, month: per.month, viewMode: 'week', dateFrom: per.from, dateTo: per.to }).dist
+        postSnapshot({ year: per.year, month: per.month, viewMode: 'week', dateFrom: per.from, dateTo: per.to }, wDist)
+      } catch (e) { console.warn('[auto snapshot]', e) }
+    }, 1000)
+    return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current) }
+  }, [pay, att, loc, adj, brk, postSnapshot])
 
   const results = calcResult?.results || []
   const ftCount = results.filter(e => e.type === '月薪正職').length
