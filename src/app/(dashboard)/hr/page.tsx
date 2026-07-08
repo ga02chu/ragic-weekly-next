@@ -668,15 +668,12 @@ export default function HRPage() {
   const monthDays = new Date(year, month, 0).getDate()
   const pfActual = (() => {
     if (!isWeek || !dateFrom || !dateTo) return 1
-    // 把日期範圍裁切到選定月份（避免跨月時 pf 被誇大）
-    const monthS = new Date(year, month - 1, 1)
-    const monthE = new Date(year, month, 0)
+    // 跨月區間整段歸選定月份算（與 computeHr 的 pf 同一套口徑），
+    // pf = 期間天數 ÷ 選定月天數，這樣月底估值 = 週成本 ÷ pf 才不會失真
     const f = new Date(dateFrom)
     const t = new Date(dateTo)
-    const ef = f > monthS ? f : monthS
-    const et = t < monthE ? t : monthE
-    if (ef > et) return 0.01
-    const days = Math.round((et.getTime() - ef.getTime()) / 86400000) + 1
+    if (f > t) return 0.01
+    const days = Math.round((t.getTime() - f.getTime()) / 86400000) + 1
     return Math.max(0.01, Math.min(1, days / monthDays))
   })()
   const projectMonthEnd = (val: number) => pfActual > 0 && pfActual < 1 ? val / pfActual : val

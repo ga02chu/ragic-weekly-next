@@ -50,10 +50,10 @@ export function computeHr(args: ComputeHrArgs): ComputeHrOutput {
     const today = new Date()
     // 用「本地時間」解析日期字串：new Date('2026-06-08') 會被當 UTC 半夜（台灣 +8 即
     // 早上 8 點），導致該日打卡被擋在期間外、每週第一天被漏算。補 T00:00:00 / T23:59:59。
-    let s = dateFrom ? new Date(dateFrom + 'T00:00:00') : monthStart
-    let e = dateTo ? new Date(dateTo + 'T23:59:59') : (today < monthEnd ? today : monthEnd)
-    if (s < monthStart) s = monthStart
-    if (e > monthEnd) e = monthEnd
+    // 允許跨月區間（例如 6/29-7/5）：整段歸「選定月份」算，
+    // 月薪比例 = 期間天數 ÷ 選定月天數，薪資表/加扣項都用選定月的。
+    const s = dateFrom ? new Date(dateFrom + 'T00:00:00') : monthStart
+    const e = dateTo ? new Date(dateTo + 'T23:59:59') : (today < monthEnd ? today : monthEnd)
     sDate = s; eDate = e
     if (eDate < sDate) { sDate = monthStart; eDate = monthEnd }
     const periodDays = Math.round((eDate.getTime() - sDate.getTime()) / 86400000) + 1
