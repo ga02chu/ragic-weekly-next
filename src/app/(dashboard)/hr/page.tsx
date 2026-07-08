@@ -240,6 +240,13 @@ function BatchDropZone({ onFiles }: { onFiles: (files: File[]) => void }) {
   )
 }
 
+// HR 系統正式結算的店 ↔ 週報分店分攤類別對映（台北在正式結算不分明曜/仁愛）
+const OFFICIAL_STORE_MAP: { store: string; cats: string[] }[] = [
+  { store: '料韓男台北', cats: ['品牌概念店', '料韓男2號店'] },
+  { store: '料韓男3號店', cats: ['料韓男3號店'] },
+  { store: '英洙家', cats: ['英洙家'] },
+]
+
 export default function HRPage() {
   const now = new Date()
   const [year, setYear] = useState(now.getFullYear())
@@ -266,6 +273,20 @@ export default function HRPage() {
   }, [viewMode, dateFrom, dateTo])
   const [excludeMgmt, setExcludeMgmt] = useState(false)
   const [resultTab, setResultTab] = useState<ResultTab>('employees')
+
+  // HR 系統該月正式結算（每店加總），沒有結算時為 null
+  const [official, setOfficial] = useState<Record<string, { gross: number; ins: number; cost: number }> | null>(null)
+  useEffect(() => {
+    let alive = true
+    setOfficial(null)
+    fetch(`/api/hr-official?year=${year}&month=${month}`)
+      .then(r => r.json())
+      .then(res => {
+        if (alive && res?.stores && Object.keys(res.stores).length > 0) setOfficial(res.stores)
+      })
+      .catch(() => { /* 讀不到就不顯示對帳卡 */ })
+    return () => { alive = false }
+  }, [year, month])
 
   const [pay, setPay] = useState<HREmployee[]>([])
   const [att, setAtt] = useState<AttResult | null>(null)
@@ -1127,6 +1148,66 @@ export default function HRPage() {
               </div>
             </div>
           )}
+
+          {/* 整月模式專屬：與 HR 系統正式結算對帳 */}
+          {!isWeek && official && storeDist.length > 0 && (() => {
+            const rows = OFFICIAL_STORE_MAP.map(m => {
+              const off = m.store === '料韓男台北'
+                ? (official['料韓男台北']?.cost ?? 0) + (official['料韓男明曜']?.cost ?? 0) + (official['料韓男仁愛']?.cost ?? 0)
+                : official[m.store]?.cost ?? 0
+              const week = storeDist.filter(d => m.cats.includes(d.cat)).reduce((s, d) => s + d.totalCost, 0)
+              return { store: m.store, off, week, diff: week - off }
+            }).filter(r => r.off > 0 || r.week > 0)
+            if (!rows.length) return null
+            const tOff = rows.reduce((s, r) => s + r.off, 0)
+            const tWeek = rows.reduce((s, r) => s + r.week, 0)
+            const pctColor = (diff: number, off: number) =>
+              off > 0 && Math.abs(diff / off) > 0.05 ? '#dc2626' : '#6b7280'
+            return (
+              <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '16px 20px', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 700, color: '#1a2f4e', fontSize: 14 }}>🧾 與 HR 系統正式結算對帳</span>
+                  <span style={{ fontSize: 12, color: '#6b7280' }}>{year}/{month} 月（含勞健保；總部兩邊都不列入）</span>
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ background: '#fafaf8' }}>
+                        {['分店', 'HR 正式結算', '週報估算', '差額', '差率'].map(h => (
+                          <th key={h} style={{ padding: '8px 12px', textAlign: h === '分店' ? 'left' : 'right', color: '#6b7280', fontWeight: 600 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map(r => (
+                        <tr key={r.store} style={{ borderTop: '1px solid #f0eeea' }}>
+                          <td style={{ padding: '8px 12px', fontWeight: 600 }}>{r.store}{r.store === '料韓男台北' ? '（=明曜+仁愛）' : ''}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fT(r.off)}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fT(r.week)}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', color: pctColor(r.diff, r.off) }}>{r.diff >= 0 ? '+' : ''}{fT(r.diff)}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: pctColor(r.diff, r.off) }}>
+                            {r.off > 0 ? `${r.diff >= 0 ? '+' : ''}${(r.diff / r.off * 100).toFixed(1)}%` : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                      <tr style={{ borderTop: '2px solid #e8e6e1', background: '#fafaf8' }}>
+                        <td style={{ padding: '8px 12px', fontWeight: 700 }}>合計</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700 }}>{fT(tOff)}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700 }}>{fT(tWeek)}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: pctColor(tWeek - tOff, tOff) }}>{tWeek - tOff >= 0 ? '+' : ''}{fT(tWeek - tOff)}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: pctColor(tWeek - tOff, tOff) }}>
+                          {tOff > 0 ? `${tWeek - tOff >= 0 ? '+' : ''}${((tWeek - tOff) / tOff * 100).toFixed(1)}%` : '—'}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 8 }}>
+                  正式結算 = HR 人事系統的月結數字（唯一正確答案）。差率長期偏同一方向屬正常——週報少算考績扣款、季獎金等月結項目，看趨勢時心裡校正即可。
+                </div>
+              </div>
+            )
+          })()}
 
           {/* KPI */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
