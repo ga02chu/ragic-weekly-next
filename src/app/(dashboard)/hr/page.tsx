@@ -234,7 +234,7 @@ function BatchDropZone({ onFiles }: { onFiles: (files: File[]) => void }) {
         {dragOver ? '放開以一次上傳所有檔案' : '一次拖拉所有 Excel 檔到這裡'}
       </div>
       <div style={{ fontSize: 11, color: '#6b7280' }}>
-        系統會依檔名關鍵字自動分類（薪資 / 出勤 / 打卡 / 休息 / 調整）
+        系統會依檔名關鍵字自動分類（出勤 / 打卡 / 休息）
       </div>
     </div>
   )
@@ -304,6 +304,9 @@ export default function HRPage() {
   const [savedAt, setSavedAt] = useState<number | null>(null)
   const [chartData, setChartData] = useState<{ name: string; rev: number; cost: number }[]>([])
 
+  // 進場時自動從 HR 系統帶最新薪資保險現值（rehydrate 完才跑，避免被雲端舊資料蓋回去）
+  const loadPayFromHRRef = useRef<() => void>(() => {})
+
   // 雲端=唯一真實來源；localStorage 只當離線快取/初次 paint。
   // 進場流程：先從 /api/hr-raw 抓最新，cloud 有→ override local；cloud 沒→ 清掉舊 local；
   // cloud 掛掉→ 退而 fallback localStorage。
@@ -316,7 +319,7 @@ export default function HRPage() {
         const sa = s('hr_data_att'); if (sa) { setAtt(rehydrateAtt(sa)); setFileStatus(p => ({ ...p, att: 'loaded' })) }
         const sl = s('hr_data_loc'); if (sl) { setLoc(rehydrateLoc(sl)); setFileStatus(p => ({ ...p, loc: 'loaded' })) }
         const sb = s('hr_data_brk'); if (sb) { setBrk(sb); setFileStatus(p => ({ ...p, brk: 'loaded' })) }
-        const sj = s('hr_data_adj'); if (sj) { setAdj(rehydrateAdj(sj)); setFileStatus(p => ({ ...p, adj: 'loaded' })) }
+        // 調整表已停用（月結都在 HR 系統做），不再載入舊資料
         const sm = s('hr_data_meta'); if (sm?.timestamp) setSavedAt(sm.timestamp)
         const keys: FileKey[] = ['pay', 'att', 'loc', 'adj', 'brk']
         const nextMeta: Record<FileKey, FileMeta | undefined> = { pay: undefined, att: undefined, loc: undefined, adj: undefined, brk: undefined }
@@ -373,7 +376,7 @@ export default function HRPage() {
       applyOrClear('pay', () => setPay([]))
       applyOrClear('att', () => setAtt(null))
       applyOrClear('loc', () => setLoc([]))
-      applyOrClear('adj', () => setAdj(emptyAdj))
+      // 調整表已停用，雲端殘留也不套用
       applyOrClear('brk', () => setBrk([]))
 
       if (uploads.length) {
@@ -384,8 +387,11 @@ export default function HRPage() {
         setSavedAt(null)
         try { localStorage.removeItem('hr_data_meta') } catch { /* ignore */ }
       }
+      // rehydrate 完成後再用 HR 系統現值覆蓋薪資保險（HR 為正解）
+      if (!aborted) loadPayFromHRRef.current()
     }).catch(() => {
-      // 雲端掛掉時保留剛剛樂觀載入的 local
+      // 雲端掛掉時保留剛剛樂觀載入的 local；薪資保險仍嘗試連 HR 系統
+      if (!aborted) loadPayFromHRRef.current()
     })
 
     return () => { aborted = true }
@@ -483,6 +489,7 @@ export default function HRPage() {
     }
     setHrPayBusy(false)
   }, [])
+  useEffect(() => { loadPayFromHRRef.current = loadPayFromHR }, [loadPayFromHR])
 
   const clearFile = useCallback((key: FileKey) => {
     setFileStatus(prev => ({ ...prev, [key]: 'idle' }))
@@ -883,34 +890,34 @@ export default function HRPage() {
               const lower = f.name.toLowerCase()
               const name = f.name
               let key: FileKey | null = null
-              if (name.includes('薪資') || lower.includes('pay') || lower.includes('salary')) key = 'pay'
-              else if (name.includes('出勤') || lower.includes('att')) key = 'att'
+              if (name.includes('出勤') || lower.includes('att')) key = 'att'
               else if (name.includes('上下班') || name.includes('上班打卡') || name.includes('打卡') || lower.includes('loc') || lower.includes('clock')) key = 'loc'
               else if (name.includes('休息') || lower.includes('brk') || lower.includes('break')) key = 'brk'
-              else if (name.includes('調整') || lower.includes('adj') || lower.includes('adjust')) key = 'adj'
               if (key) handleFile(key, f)
             })
           }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
             <button onClick={loadPayFromHR} disabled={hrPayBusy}
               style={{
-                padding: '7px 14px', borderRadius: 8, border: '1px solid #3c2929',
-                background: hrPayBusy ? '#f5f5f4' : '#3c2929', color: hrPayBusy ? '#9ca3af' : '#fff',
+                padding: '7px 14px', borderRadius: 8,
+                border: `1px solid ${pay.length ? '#bbf7d0' : '#3c2929'}`,
+                background: hrPayBusy ? '#f5f5f4' : pay.length ? '#f0fdf4' : '#3c2929',
+                color: hrPayBusy ? '#9ca3af' : pay.length ? '#166534' : '#fff',
                 fontSize: 12, fontWeight: 700, cursor: hrPayBusy ? 'wait' : 'pointer',
               }}>
-              {hrPayBusy ? '⏳ 讀取中…' : '🔗 薪資保險：直接帶 HR 系統資料（免上傳）'}
+              {hrPayBusy ? '⏳ 同步 HR 系統中…'
+                : pay.length ? `✓ 薪資保險已連結 HR 系統（${pay.length} 人在職）· 點擊重新同步`
+                : '🔗 薪資保險：連結 HR 系統'}
             </button>
             <span style={{ fontSize: 12, color: '#6b7280' }}>
-              💡 其他檔案直接點擊或<strong>拖拉</strong>到下方方塊。資料會自動存在你的瀏覽器，下次打開不用再上傳。
+              💡 出勤/打卡/休息檔直接點擊或<strong>拖拉</strong>到下方方塊。資料會自動存在你的瀏覽器，下次打開不用再上傳。
             </span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 10 }}>
             {([
-              { key: 'pay' as FileKey, label: '薪資表',     icon: '💰', hint: '必填' },
               { key: 'att' as FileKey, label: '出勤紀錄',   icon: '📋', hint: '必填' },
               { key: 'loc' as FileKey, label: '上班打卡',   icon: '📍', hint: '必填' },
               { key: 'brk' as FileKey, label: '休息紀錄',   icon: '☕', hint: '必填' },
-              { key: 'adj' as FileKey, label: '調整表',     icon: '🔧', hint: '選填（月報用）' },
             ]).map(({ key, label, icon, hint }) => (
               <UploadZone
                 key={key}
@@ -927,23 +934,8 @@ export default function HRPage() {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 11, color: '#9ca3af', flexWrap: 'wrap' }}>
             <span>
-              已載入：薪資 {pay.length} 筆 · 出勤 {att?.records.length || 0} 筆 · 打卡 {loc.length} 筆 · 休息 {brk.length} 筆
-              {' · 調整：'}請假/到離職/加扣 {adj.records.length} 筆
-              {adj.holidays.length > 0 && ` · 國定假日 ${adj.holidays.length} 天`}
-              {Object.keys(adj.lates).length > 0 && ` · 遲到 ${Object.keys(adj.lates).length} 人`}
-              {Object.keys(adj.compHours).length > 0 && ` · 換補休 ${Object.keys(adj.compHours).length} 人`}
-              {adj.foreigners.length > 0 && ` · 外籍 ${adj.foreigners.length} 人`}
+              已載入：薪資 {pay.length} 筆（HR 系統）· 出勤 {att?.records.length || 0} 筆 · 打卡 {loc.length} 筆 · 休息 {brk.length} 筆
             </span>
-            {(() => {
-              const tm = adjTargetMonth(adj)
-              if (!tm) return null
-              const matches = tm.year === year && tm.month === month
-              return (
-                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: matches ? '#dcfce7' : '#fef3c7', color: matches ? '#166534' : '#92400e' }}>
-                  {matches ? '✓' : '⚠'} 調整表為 {tm.year}/{tm.month} 月{!matches && `（不符當前 ${year}/${month}，月份相關加扣不套用）`}
-                </span>
-              )
-            })()}
             {savedAt && (
               <span style={{ color: '#16a34a', fontSize: 11 }}>
                 ✓ 上次記憶：{new Date(savedAt).toLocaleDateString('zh-TW')} {new Date(savedAt).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })}
