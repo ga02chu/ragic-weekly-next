@@ -328,6 +328,20 @@ export default function HRPage() {
     } catch { return [] }
   }, [])
 
+  // 加扣項改讀 HR 系統 monthly_adjustments（按 年-月 快取）
+  type HrAdj = { id: string; code: string; desc: string; amt: number; note: string }
+  const hrAdjCacheRef = useRef<Record<string, HrAdj[]>>({})
+  const getHrAdj = useCallback(async (y: number, m: number): Promise<HrAdj[]> => {
+    const key = `${y}-${m}`
+    if (hrAdjCacheRef.current[key]) return hrAdjCacheRef.current[key]
+    try {
+      const res = await fetch(`/api/hr-adjustments?year=${y}&month=${m}`).then(r => r.json())
+      const rows: HrAdj[] = Array.isArray(res?.adjustments) ? res.adjustments : []
+      hrAdjCacheRef.current[key] = rows
+      return rows
+    } catch { return [] }
+  }, [])
+
   // 雲端=唯一真實來源；localStorage 只當離線快取/初次 paint。
   // 進場流程：先從 /api/hr-raw 抓最新，cloud 有→ override local；cloud 沒→ 清掉舊 local；
   // cloud 掛掉→ 退而 fallback localStorage。
@@ -536,11 +550,11 @@ export default function HRPage() {
     if (!pay.length || !att) { setCompErr('請先上傳薪資表與出勤記錄'); return }
     setComputing(true); setCompErr('')
     try {
-      const holidays = await getHolidays(year, month)
+      const [holidays, hrAdjustments] = await Promise.all([getHolidays(year, month), getHrAdj(year, month)])
       // 計算核心抽到 computeHr（與「上傳後自動計算」共用同一份，數字零漂移）
       const { result, dist } = computeHr({
         pay, att, loc, adj, brk, year, month, viewMode, dateFrom, dateTo,
-        stdH, storeFilter, excludeMgmt, locFilter, holidays,
+        stdH, storeFilter, excludeMgmt, locFilter, holidays, hrAdjustments,
       })
       setCalcResult(result)
       setStoreDist(dist)
@@ -627,8 +641,8 @@ export default function HRPage() {
       try {
         const per = detectPeriod(att)
         if (!per) return
-        const holidays = await getHolidays(per.year, per.month)
-        const base = { pay, att, loc, adj, brk, stdH: getMonthlyStdH(per.year, per.month), holidays }
+        const [holidays, hrAdjustments] = await Promise.all([getHolidays(per.year, per.month), getHrAdj(per.year, per.month)])
+        const base = { pay, att, loc, adj, brk, stdH: getMonthlyStdH(per.year, per.month), holidays, hrAdjustments }
         // 月快照（pf=1）
         const mDist = computeHr({ ...base, year: per.year, month: per.month, viewMode: 'month' }).dist
         postSnapshot({ year: per.year, month: per.month, viewMode: 'month', dateFrom: null, dateTo: null }, mDist)
@@ -638,7 +652,7 @@ export default function HRPage() {
       } catch (e) { console.warn('[auto snapshot]', e) }
     }, 1000)
     return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current) }
-  }, [pay, att, loc, adj, brk, postSnapshot, getHolidays])
+  }, [pay, att, loc, adj, brk, postSnapshot, getHolidays, getHrAdj])
 
   const results = calcResult?.results || []
   const ftCount = results.filter(e => e.type === '月薪正職').length
@@ -835,14 +849,16 @@ export default function HRPage() {
       {/* 1. 人事成本佔比明細（最上方主視覺） */}
       {hasResult ? (() => {
         // 上方合計卡＝全部（含總部）；下方組成明細卡＝不含總部（跟分店口徑一致）
-        const COUNTED_CODES = new Set(['6002', '20032'])
+        // 特休轉薪資：Apollo 代號 20032 ＋ HR 系統科目 2002（不休假代金）都認
+        const ANNUAL_CODES = new Set(['20032', '2002'])
+        const COUNTED_CODES = new Set(['6002', '20032', '2002'])
         const isHQEmp = (e: (typeof results)[number]) => e.dept.includes('總部') || e.dept.includes('執行長')
         const calcParts = (rs: typeof results) => {
           const sal = rs.reduce((s, e) => s + (e.propSal || 0), 0)
           const ot = rs.reduce((s, e) => s + (e.type === '月薪正職' ? (e.weekOtPay || 0) : 0), 0)
           const ins = rs.reduce((s, e) => s + (e.propIns || 0), 0)
           const holi = rs.reduce((s, e) => s + (e.extraDetail?.filter(d => d.code === '6002') || []).reduce((a, b) => a + b.amt, 0), 0)
-          const annual = rs.reduce((s, e) => s + (e.extraDetail?.filter(d => d.code === '20032') || []).reduce((a, b) => a + b.amt, 0), 0)
+          const annual = rs.reduce((s, e) => s + (e.extraDetail?.filter(d => ANNUAL_CODES.has(d.code)) || []).reduce((a, b) => a + b.amt, 0), 0)
           const other = rs.reduce((s, e) => s + (e.extraDetail?.filter(d => !COUNTED_CODES.has(d.code)) || []).reduce((a, b) => a + b.amt, 0), 0)
           return { sal, ot, ins, holi, annual, other, total: sal + ot + ins + holi + annual + other }
         }

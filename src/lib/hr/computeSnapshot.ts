@@ -21,6 +21,9 @@ export interface ComputeHrArgs {
   dateTo?: string
   stdH: number
   holidays?: HolidayEntry[]   // HR 系統 public_holidays 帶入的國定假日（取代調整表）
+  // HR 系統 monthly_adjustments 帶入的加扣項（取代 Apollo 出勤檔加扣項分頁）。
+  // 有給（含空陣列）就完全改用這份；undefined 才 fallback 到 Apollo 檔。
+  hrAdjustments?: { id: string; code: string; desc: string; amt: number; note: string }[]
   storeFilter?: string
   excludeMgmt?: boolean
   locFilter?: string
@@ -81,8 +84,22 @@ export function computeHr(args: ComputeHrArgs): ComputeHrOutput {
     ...dbHolidays,
     ...adjHolidays.filter(h => !dbDates.has(h.dateStr.replace(/\//g, '-'))),
   ]
+  // 加扣項來源：HR 系統登記表優先（歸屬月正解）；沒接 HR 時才用 Apollo 檔（發薪月口徑）
+  let baseExtras: { extras: Record<string, number>; details: Record<string, { code: string; desc: string; amt: number; note: string }[]> }
+  if (args.hrAdjustments !== undefined) {
+    const ex: Record<string, number> = {}
+    const de: Record<string, { code: string; desc: string; amt: number; note: string }[]> = {}
+    args.hrAdjustments.forEach(a => {
+      ex[a.id] = (ex[a.id] || 0) + a.amt
+      if (!de[a.id]) de[a.id] = []
+      de[a.id].push({ code: a.code, desc: a.desc, amt: a.amt, note: a.note })
+    })
+    baseExtras = { extras: ex, details: de }
+  } else {
+    baseExtras = { extras: att.extras || {}, details: att.extrasDetail || {} }
+  }
   const merged = mergeExtras(
-    { extras: att.extras || {}, details: att.extrasDetail || {} },
+    baseExtras,
     adjMonthMatches
       ? (adjExtrasForMonth(adj.records, pay) as { extras: Record<string, number>; details: Record<string, { code: string; desc: string; amt: number; note: string }[]> })
       : { extras: {}, details: {} },
