@@ -790,23 +790,30 @@ export default function HRPage() {
 
       {/* 1. 人事成本佔比明細（最上方主視覺） */}
       {hasResult ? (() => {
-        const salTotal = results.reduce((s, e) => s + (e.propSal || 0), 0)
-        const otTotal = results.reduce((s, e) => s + (e.type === '月薪正職' ? (e.weekOtPay || 0) : 0), 0)
-        const insTotal = results.reduce((s, e) => s + (e.propIns || 0), 0)
-        const holi6002 = results.reduce((s, e) => s + (e.extraDetail?.filter(d => d.code === '6002') || []).reduce((a, b) => a + b.amt, 0), 0)
-        const annual20032 = results.reduce((s, e) => s + (e.extraDetail?.filter(d => d.code === '20032') || []).reduce((a, b) => a + b.amt, 0), 0)
+        // 上方合計卡＝全部（含總部）；下方組成明細卡＝不含總部（跟分店口徑一致）
         const COUNTED_CODES = new Set(['6002', '20032'])
-        const otherExtras = results.reduce((s, e) => s + (e.extraDetail?.filter(d => !COUNTED_CODES.has(d.code)) || []).reduce((a, b) => a + b.amt, 0), 0)
-        const grandTotal = salTotal + otTotal + insTotal + holi6002 + annual20032 + otherExtras
+        const isHQEmp = (e: (typeof results)[number]) => e.dept.includes('總部') || e.dept.includes('執行長')
+        const calcParts = (rs: typeof results) => {
+          const sal = rs.reduce((s, e) => s + (e.propSal || 0), 0)
+          const ot = rs.reduce((s, e) => s + (e.type === '月薪正職' ? (e.weekOtPay || 0) : 0), 0)
+          const ins = rs.reduce((s, e) => s + (e.propIns || 0), 0)
+          const holi = rs.reduce((s, e) => s + (e.extraDetail?.filter(d => d.code === '6002') || []).reduce((a, b) => a + b.amt, 0), 0)
+          const annual = rs.reduce((s, e) => s + (e.extraDetail?.filter(d => d.code === '20032') || []).reduce((a, b) => a + b.amt, 0), 0)
+          const other = rs.reduce((s, e) => s + (e.extraDetail?.filter(d => !COUNTED_CODES.has(d.code)) || []).reduce((a, b) => a + b.amt, 0), 0)
+          return { sal, ot, ins, holi, annual, other, total: sal + ot + ins + holi + annual + other }
+        }
+        const all = calcParts(results)
+        const storeOnly = calcParts(results.filter(e => !isHQEmp(e)))
+        const grandTotal = all.total
         const totalRev = chartData.reduce((s, d) => s + d.rev, 0)
         const pct = (v: number, base: number) => base > 0 ? `${(v / base * 100).toFixed(1)}%` : null
         const items: { label: string; val: number; icon: string; color: string }[] = [
-          { label: '薪資', val: salTotal, icon: '💼', color: '#3b82f6' },
-          { label: '加班費', val: otTotal, icon: '⏱️', color: '#f59e0b' },
-          { label: '勞健保', val: insTotal, icon: '🏥', color: '#10b981' },
-          { label: '國定假日加給', val: holi6002, icon: '🎉', color: '#8b5cf6' },
-          { label: '特休轉薪資', val: annual20032, icon: '🏖️', color: '#ec4899' },
-          { label: '其他加扣', val: otherExtras, icon: '📋', color: '#64748b' },
+          { label: '薪資', val: storeOnly.sal, icon: '💼', color: '#3b82f6' },
+          { label: '加班費', val: storeOnly.ot, icon: '⏱️', color: '#f59e0b' },
+          { label: '勞健保', val: storeOnly.ins, icon: '🏥', color: '#10b981' },
+          { label: '國定假日加給', val: storeOnly.holi, icon: '🎉', color: '#8b5cf6' },
+          { label: '特休轉薪資', val: storeOnly.annual, icon: '🏖️', color: '#ec4899' },
+          { label: '其他加扣', val: storeOnly.other, icon: '📋', color: '#64748b' },
         ]
         const ratio = totalRev > 0 ? grandTotal / totalRev : 0
         return (
@@ -818,7 +825,7 @@ export default function HRPage() {
               display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16,
             }}>
               <div>
-                <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>{isWeek ? '期間人事成本（至今）' : '月人事成本合計'}</div>
+                <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>{isWeek ? '期間人事成本（至今，含總部）' : '月人事成本合計（含總部）'}</div>
                 <div style={{ fontSize: 28, fontWeight: 700 }}>{fT(grandTotal)}</div>
               </div>
               {totalRev > 0 && (
@@ -838,10 +845,13 @@ export default function HRPage() {
                 </>
               )}
             </div>
-            {/* 細項卡片 */}
+            {/* 細項卡片（不含總部，跟分店/對帳口徑一致） */}
+            <div style={{ fontSize: 11, color: '#9ca3af', margin: '0 2px 6px' }}>
+              組成明細（不含總部）：合計 {fT(storeOnly.total)}
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
               {items.map(it => {
-                const pCost = grandTotal > 0 ? (it.val / grandTotal * 100) : 0
+                const pCost = storeOnly.total > 0 ? (it.val / storeOnly.total * 100) : 0
                 return (
                   <div key={it.label} style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '14px 16px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -849,7 +859,7 @@ export default function HRPage() {
                       <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>{it.label}</div>
                     </div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: '#1a2f4e', marginBottom: 8 }}>{fT(it.val)}</div>
-                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>佔人事成本 {pct(it.val, grandTotal) || '–'}</div>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>佔人事成本 {pct(it.val, storeOnly.total) || '–'}</div>
                     <div style={{ height: 6, background: '#f3f4f6', borderRadius: 3, overflow: 'hidden' }}>
                       <div style={{ height: '100%', width: `${pCost.toFixed(1)}%`, background: it.color, borderRadius: 3 }} />
                     </div>
