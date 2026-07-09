@@ -448,6 +448,42 @@ export default function HRPage() {
     }
   }, [])
 
+  // 薪資保險改從 HR 系統帶入（同資料庫 public.employees 現值），走與 handleFile 相同的後續流程
+  const [hrPayBusy, setHrPayBusy] = useState(false)
+  const loadPayFromHR = useCallback(async () => {
+    setHrPayBusy(true)
+    setParseErr(prev => ({ ...prev, pay: '' }))
+    setFileStatus(prev => ({ ...prev, pay: 'parsing' }))
+    try {
+      const res = await fetch('/api/hr-employees').then(r => r.json())
+      if (res?.error || !Array.isArray(res?.employees)) throw new Error(res?.error || '讀取 HR 系統失敗')
+      const parsed = res.employees as HREmployee[]
+      setPay(rehydratePay(parsed))
+      setFileStatus(prev => ({ ...prev, pay: 'loaded' }))
+      const meta: FileMeta = { name: `🔗 HR 系統帶入（${res.count} 人在職）`, size: 0, uploadedAt: Date.now() }
+      setFileMeta(prev => ({ ...prev, pay: meta }))
+      dirtyRef.current = true   // 觸發「上傳後自動計算」effect
+      try {
+        localStorage.setItem('hr_data_pay', JSON.stringify(parsed))
+        localStorage.setItem('hr_meta_pay', JSON.stringify(meta))
+        const ts = Date.now()
+        localStorage.setItem('hr_data_meta', JSON.stringify({ timestamp: ts }))
+        setSavedAt(ts)
+      } catch { /* storage full, ignore */ }
+      fetch('/api/hr-raw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_key: 'pay', data: parsed, meta }),
+      }).then(r => r.json()).then(r2 => {
+        if (r2?.error) console.warn('[hr-raw upload]', r2.error)
+      }).catch(err => console.warn('[hr-raw upload]', err))
+    } catch (e: unknown) {
+      setFileStatus(prev => ({ ...prev, pay: 'error' }))
+      setParseErr(prev => ({ ...prev, pay: e instanceof Error ? e.message : '讀取 HR 系統失敗' }))
+    }
+    setHrPayBusy(false)
+  }, [])
+
   const clearFile = useCallback((key: FileKey) => {
     setFileStatus(prev => ({ ...prev, [key]: 'idle' }))
     setFileMeta(prev => ({ ...prev, [key]: undefined }))
@@ -855,8 +891,18 @@ export default function HRPage() {
               if (key) handleFile(key, f)
             })
           }} />
-          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-            💡 也可以直接點擊或<strong>拖拉</strong>到下方各別方塊。資料會自動存在你的瀏覽器，下次打開不用再上傳。
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+            <button onClick={loadPayFromHR} disabled={hrPayBusy}
+              style={{
+                padding: '7px 14px', borderRadius: 8, border: '1px solid #3c2929',
+                background: hrPayBusy ? '#f5f5f4' : '#3c2929', color: hrPayBusy ? '#9ca3af' : '#fff',
+                fontSize: 12, fontWeight: 700, cursor: hrPayBusy ? 'wait' : 'pointer',
+              }}>
+              {hrPayBusy ? '⏳ 讀取中…' : '🔗 薪資保險：直接帶 HR 系統資料（免上傳）'}
+            </button>
+            <span style={{ fontSize: 12, color: '#6b7280' }}>
+              💡 其他檔案直接點擊或<strong>拖拉</strong>到下方方塊。資料會自動存在你的瀏覽器，下次打開不用再上傳。
+            </span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 10 }}>
             {([
