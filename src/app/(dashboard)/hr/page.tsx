@@ -1163,6 +1163,29 @@ export default function HRPage() {
             const tWeek = rows.reduce((s, r) => s + r.week, 0)
             const pctColor = (diff: number, off: number) =>
               off > 0 && Math.abs(diff / off) > 0.05 ? '#dc2626' : '#6b7280'
+            // 防呆：載入的出勤資料要涵蓋整個選定月份，對帳才有意義。
+            // 例如載著 6/29-7/5 的週檔去算 6 月整月，工讀只有 2 天時數，差率會假性爆炸。
+            const inMonthDates = new Set(
+              (att?.records || [])
+                .filter(r => r.date && r.date.getFullYear() === year && r.date.getMonth() + 1 === month)
+                .map(r => r.dateStr)
+            )
+            const coverOk = inMonthDates.size >= monthDays * 0.9
+            if (!coverOk) {
+              return (
+                <div style={{ background: '#fffbeb', borderRadius: 12, border: '1px solid #fde68a', padding: '16px 20px', marginBottom: 16 }}>
+                  <div style={{ fontWeight: 700, color: '#92400e', fontSize: 14, marginBottom: 6 }}>
+                    🧾 對帳暫停：出勤資料不涵蓋 {year}/{month} 整月
+                  </div>
+                  <div style={{ fontSize: 12, color: '#92400e', lineHeight: 1.7 }}>
+                    目前載入的出勤紀錄在 {year}/{month} 月裡只有 <b>{inMonthDates.size} 天</b>（整月 {monthDays} 天），
+                    拿來算整月會嚴重低估，跟正式結算對帳沒有意義。
+                    想對 {year}/{month} 月的帳，請重新上傳涵蓋該月整月的出勤/打卡/休息檔案再計算。
+                    <br />參考：HR 正式結算 {rows.map(r => `${r.store} ${fT(r.off)}`).join('、')}（合計 {fT(tOff)}）。
+                  </div>
+                </div>
+              )
+            }
             return (
               <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e1', padding: '16px 20px', marginBottom: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
