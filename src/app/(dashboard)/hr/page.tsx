@@ -811,6 +811,27 @@ export default function HRPage() {
     <div style={{ padding: 24, maxWidth: 1400 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, color: '#1a2f4e', marginBottom: 16 }}>人事成本</h1>
 
+      {/* 計算中浮動視窗（使用者反映按了以為沒在跑） */}
+      {computing && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(250,250,248,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 8px 30px rgba(0,0,0,0.18)', border: '1px solid #e8e6e1', padding: '22px 32px', display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ width: 24, height: 24, border: '3px solid #e8e6e1', borderTopColor: BRAND, borderRadius: '50%', animation: 'hrspin 0.8s linear infinite' }} />
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#1a2f4e' }}>計算中…</div>
+              <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>正在計算人事成本、抓營業額比對，約需幾秒</div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* 進場自動同步 HR 名單的小提示（不擋操作） */}
+      {!computing && hrPayBusy && (
+        <div style={{ position: 'fixed', right: 20, bottom: 20, zIndex: 1000, background: '#fff', borderRadius: 12, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', border: '1px solid #e8e6e1', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 16, height: 16, border: '2.5px solid #e8e6e1', borderTopColor: BRAND, borderRadius: '50%', animation: 'hrspin 0.8s linear infinite' }} />
+          <span style={{ fontSize: 12, color: '#6b7280' }}>同步 HR 系統薪資名單中…</span>
+        </div>
+      )}
+      <style>{`@keyframes hrspin { to { transform: rotate(360deg) } }`}</style>
+
       {/* 1. 人事成本佔比明細（最上方主視覺） */}
       {hasResult ? (() => {
         // 上方合計卡＝全部（含總部）；下方組成明細卡＝不含總部（跟分店口徑一致）
