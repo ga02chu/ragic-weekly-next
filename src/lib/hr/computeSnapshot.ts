@@ -5,7 +5,7 @@ import {
   computeStoreDist, holidayPayForMonth, compHoursIdMap, latePenaltyForMonth,
   birthdayBonusForMonth, foreignerIdsFromNames, mergeExtras, adjTargetMonth,
   type HREmployee, type AttResult, type LocRecord, type BreakRecord,
-  type ParsedAdjustments, type CalcResult,
+  type ParsedAdjustments, type CalcResult, type HolidayEntry,
 } from './calc'
 
 export interface ComputeHrArgs {
@@ -20,6 +20,7 @@ export interface ComputeHrArgs {
   dateFrom?: string
   dateTo?: string
   stdH: number
+  holidays?: HolidayEntry[]   // HR 系統 public_holidays 帶入的國定假日（取代調整表）
   storeFilter?: string
   excludeMgmt?: boolean
   locFilter?: string
@@ -70,9 +71,16 @@ export function computeHr(args: ComputeHrArgs): ComputeHrOutput {
   const lateRes = adjMonthMatches
     ? latePenaltyForMonth(adj.lates, pay)
     : { extras: { extras: {}, details: {} }, ptZeroIds: new Set<string>() }
-  const holidaysInMonth = adjMonthMatches
+  // 國定假日：調整表（舊路徑）＋ HR 系統 public_holidays（新路徑）合併，同日以 HR 為準
+  const adjHolidays = adjMonthMatches
     ? adj.holidays.filter(h => h.date && h.date.getFullYear() === year && h.date.getMonth() + 1 === month)
     : []
+  const dbHolidays = (args.holidays || []).filter(h => h.date && h.date.getFullYear() === year && h.date.getMonth() + 1 === month)
+  const dbDates = new Set(dbHolidays.map(h => h.dateStr.replace(/\//g, '-')))
+  const holidaysInMonth = [
+    ...dbHolidays,
+    ...adjHolidays.filter(h => !dbDates.has(h.dateStr.replace(/\//g, '-'))),
+  ]
   const merged = mergeExtras(
     { extras: att.extras || {}, details: att.extrasDetail || {} },
     adjMonthMatches

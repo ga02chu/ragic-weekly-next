@@ -17,6 +17,7 @@ export interface HREmployee {
   type: '月薪正職' | '時薪工讀' | '未設定'
   hireDate: Date | null
   birthday: Date | null
+  resignDate?: Date | null   // HR 系統帶入時有值；到離職月應執勤按在職天數打折、期間外整個排除
 }
 
 export interface AttRecord {
@@ -24,6 +25,7 @@ export interface AttRecord {
   dateStr: string; date: Date | null
   hours: number; inTime: string; outTime: string
   crossMidnight: boolean; rule?: string
+  leaveH?: number   // 該筆的「請假時數」欄（Apollo 出勤紀錄），扣應執勤用
 }
 
 export interface AttResult {
@@ -289,6 +291,7 @@ export function parseAtt(wb: XLSX.WorkBook): AttResult {
     const C = (n: string) => fuzzyCol(hdr, n)
     const cu = C('單位'), ci = C('工號'), cn = C('姓名'), cd = C('日期')
     const cin = C('上班打卡時間'), cout = C('下班打卡時間'), ca = C('實際工時')
+    const clv = C('請假時數')
     if (ci < 0) continue
     const records: AttRecord[] = rows.slice(hi + 1)
       .filter(r => String((r as string[])[ci] || '').trim().startsWith('N'))
@@ -304,6 +307,7 @@ export function parseAtt(wb: XLSX.WorkBook): AttResult {
           inTime: row[cin] != null ? String(row[cin]) : '',
           outTime: row[cout] != null ? String(row[cout]) : '',
           crossMidnight: isCross(iM, oM),
+          leaveH: clv >= 0 ? (+(row[clv] as number) || 0) : 0,
         }
       })
 
@@ -691,7 +695,12 @@ export function holidayPayForMonth(
   const out = emptyExtras()
   if (!holidays.length) return out
   const holiMult: Record<string, number> = {}
-  holidays.forEach(h => { if (h.dateStr) holiMult[h.dateStr] = h.multiplier || 2 })
+  holidays.forEach(h => {
+    if (!h.dateStr) return
+    // 斜線/連字號兩種日期格式都註冊（出勤檔用 2026/06/19、資料庫用 2026-06-19）
+    holiMult[h.dateStr.replace(/-/g, '/')] = h.multiplier || 2
+    holiMult[h.dateStr.replace(/\//g, '-')] = h.multiplier || 2
+  })
   const empById = Object.fromEntries(pay.map(e => [e.id, e]))
   // 累加每位工讀員工在國定假日當天的加給
   const acc: Record<string, { amt: number; days: number }> = {}
@@ -887,18 +896,34 @@ export function calcResults(
 
   const hByE: Record<string, number> = {}
   const dByE: Record<string, Record<string, number>> = {}
+  const leaveByE: Record<string, number> = {}   // 期間內請假時數（Apollo 出勤檔請假欄），扣應執勤
   sr.forEach(p => {
     if (!hByE[p.id]) { hByE[p.id] = 0; dByE[p.id] = {} }
     const breakH = breakMap[`${p.id}:${p.dateStr}`] || 0
     const netH = Math.max(0, p.hours - breakH)
     hByE[p.id] += netH
     dByE[p.id][p.dateStr] = (dByE[p.id][p.dateStr] || 0) + netH
+    if (p.leaveH) leaveByE[p.id] = (leaveByE[p.id] || 0) + p.leaveH
   })
+
+  // 到職/離職落在期間內 → 應執勤按在職天數比例打折（同 HR 系統口徑：月薪不打折、時數打折）
+  // 完全不在期間內（已離職/未到職）→ 整個排除
+  const periodTotalDays = Math.max(1, Math.round((eDate.getTime() - sDate.getTime()) / 86400000) + 1)
+  const activeFactor = (e: HREmployee): number => {
+    const h = e.hireDate && !isNaN(e.hireDate.getTime()) ? e.hireDate : null
+    const r = e.resignDate && !isNaN(e.resignDate.getTime()) ? e.resignDate : null
+    const s0 = h && h > sDate ? h : sDate
+    const e0 = r && r < eDate ? r : eDate
+    if (e0 < s0) return 0
+    const d = Math.round((e0.getTime() - s0.getTime()) / 86400000) + 1
+    return Math.min(1, d / periodTotalDays)
+  }
 
   const payF = store ? pay.filter(e => e.dept === store || punchIds.has(e.id)) : pay
 
   const results: EmployeeResult[] = payF.filter(e => {
     if (e.type === '未設定') return false
+    if (activeFactor(e) === 0) return false   // 期間內完全不在職（已離職/未到職）
     if (excludeMgmt && (e.dept.includes('總部') || e.dept.includes('執行長') || e.dept === '')) return false
     if (locFilter) {
       const r = ruleMap[e.id] || ''
@@ -938,14 +963,18 @@ export function calcResults(
       const hr = ftOTbase(e) / FT_DIV
       // 總部人員不計打卡時數、不計加班費（spec MD 第十一條）
       const isHQ = e.dept.includes('總部') || e.dept.includes('執行長') || e.titleLoc === '總部'
-      const rawOtH = isHQ ? 0 : Math.max(0, totalH - eS)
+      // 應執勤 = 標準工時 × 在職天數比例 − 期間請假時數（同 HR 系統：請假不扣薪、扣應執勤）
+      const eLeave = leaveByE[e.id] || 0
+      const af = activeFactor(e)
+      const reqEff = Math.max(0, eS * af - eLeave)
+      const rawOtH = isHQ ? 0 : Math.max(0, totalH - reqEff)
       // 換補休：從加班時數中扣（不扣已成正常工時的部分）
       const compH = compHIdMap[e.id] || 0
       const otH = Math.max(0, rawOtH - compH)
       const otPay = (noPunch || isHQ) ? null : ftOT(otH, hr)
       // 本月不足直接扣薪（時數不足扣回，code 1000）— 已含上月不足挪過來的時數
       // 只在整月結算 (pf=1) 時扣；週期模式下不扣，避免顯示週進度造成的負加扣項
-      const shortageRef = eS * finalPf
+      const shortageRef = reqEff * (pf < 1 ? finalPf : 1)
       const shortageH = (noPunch || isHQ || pf < 1) ? 0 : Math.max(0, shortageRef - totalH)
       const shortageCut = Math.round(shortageH * hr)
       let extraAmt = att.extras ? (att.extras[e.id] || 0) : 0
@@ -956,7 +985,7 @@ export function calcResults(
         extraDetail.push({ code: '1000', desc: '時數不足扣回', amt: -shortageCut, note: `${shortageH.toFixed(2)}H` })
       }
       const gross = noPunch ? null : e.fixedSalary + (otPay || 0) + extraAmt
-      const weekStd = eS * finalPf
+      const weekStd = Math.max(0, eS * af * finalPf - eLeave)
       const rawWeekOtH = isHQ ? 0 : Math.max(0, totalH - weekStd)
       const weekOtH = Math.max(0, rawWeekOtH - compH)
       const weekOtPay = ftOT(weekOtH, hr)

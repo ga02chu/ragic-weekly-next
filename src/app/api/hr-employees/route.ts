@@ -17,11 +17,14 @@ const STORE_TO_DEPT: Record<string, string> = {
 export async function GET() {
   try {
     const supabase = await createClient()
+    // 在職 + 近三個月內離職的都帶（算過去月份才不會漏掉離職者；
+    // 計算核心會依到職/離職日把期間外的人排除、期間內的按在職天數打折應執勤）
+    const cutoff = new Date(Date.now() - 92 * 86400000).toISOString().slice(0, 10)
     const { data, error } = await supabase
       .schema('public')
       .from('employees')
-      .select('emp_id, name, unit, store, position, base_salary, hourly_rate, food_allow, mgr_allow, housing_allow, perf_bonus, annual_bonus, skill_bonus, labor_ins_amt, occ_ins_amt, pension_amt, health_ins_amt, hire_date, birthday')
-      .eq('is_active', true)
+      .select('emp_id, name, unit, store, position, base_salary, hourly_rate, food_allow, mgr_allow, housing_allow, perf_bonus, annual_bonus, skill_bonus, labor_ins_amt, occ_ins_amt, pension_amt, health_ins_amt, hire_date, birthday, resign_date, is_active')
+      .or(`is_active.eq.true,resign_date.gte.${cutoff}`)
       .order('emp_id')
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 })
@@ -52,6 +55,7 @@ export async function GET() {
         type: bs > 0 ? '月薪正職' : hr > 0 ? '時薪工讀' : '未設定',
         hireDate: e.hire_date || null,
         birthday: e.birthday || null,
+        resignDate: e.is_active ? null : (e.resign_date || null),
       }
     })
     return NextResponse.json({ employees, count: employees.length })

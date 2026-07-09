@@ -11,7 +11,7 @@ import {
   emptyAdj, adjTargetMonth, deriveTitleLoc,
   fT, fH,
   type HREmployee, type AttResult, type LocRecord, type BreakRecord, type CalcResult,
-  type ParsedAdjustments, type PunchAnomaly,
+  type ParsedAdjustments, type PunchAnomaly, type HolidayEntry,
 } from '@/lib/hr/calc'
 import { computeHr, detectPeriod } from '@/lib/hr/computeSnapshot'
 
@@ -40,6 +40,7 @@ function rehydratePay(raw: HREmployee[]): HREmployee[] {
     titleLoc: deriveTitleLoc(p.title),
     hireDate: p.hireDate ? new Date(p.hireDate as unknown as string) : null,
     birthday: p.birthday ? new Date(p.birthday as unknown as string) : null,
+    resignDate: p.resignDate ? new Date(p.resignDate as unknown as string) : null,
   }))
 }
 function rehydrateAtt(raw: AttResult): AttResult {
@@ -307,6 +308,26 @@ export default function HRPage() {
   // 進場時自動從 HR 系統帶最新薪資保險現值（rehydrate 完才跑，避免被雲端舊資料蓋回去）
   const loadPayFromHRRef = useRef<() => void>(() => {})
 
+  // 國定假日改讀 HR 系統 public_holidays（按 年-月 快取）
+  const holidayCacheRef = useRef<Record<string, HolidayEntry[]>>({})
+  const getHolidays = useCallback(async (y: number, m: number): Promise<HolidayEntry[]> => {
+    const key = `${y}-${m}`
+    if (holidayCacheRef.current[key]) return holidayCacheRef.current[key]
+    try {
+      const res = await fetch(`/api/hr-holidays?year=${y}&month=${m}`).then(r => r.json())
+      const hs: HolidayEntry[] = Array.isArray(res?.holidays)
+        ? res.holidays.map((h: { dateStr: string; name: string; multiplier: number }) => ({
+            dateStr: h.dateStr,
+            date: new Date(h.dateStr + 'T00:00:00'),
+            name: h.name,
+            multiplier: h.multiplier || 2,
+          }))
+        : []
+      holidayCacheRef.current[key] = hs
+      return hs
+    } catch { return [] }
+  }, [])
+
   // 雲端=唯一真實來源；localStorage 只當離線快取/初次 paint。
   // 進場流程：先從 /api/hr-raw 抓最新，cloud 有→ override local；cloud 沒→ 清掉舊 local；
   // cloud 掛掉→ 退而 fallback localStorage。
@@ -515,10 +536,11 @@ export default function HRPage() {
     if (!pay.length || !att) { setCompErr('請先上傳薪資表與出勤記錄'); return }
     setComputing(true); setCompErr('')
     try {
+      const holidays = await getHolidays(year, month)
       // 計算核心抽到 computeHr（與「上傳後自動計算」共用同一份，數字零漂移）
       const { result, dist } = computeHr({
         pay, att, loc, adj, brk, year, month, viewMode, dateFrom, dateTo,
-        stdH, storeFilter, excludeMgmt, locFilter,
+        stdH, storeFilter, excludeMgmt, locFilter, holidays,
       })
       setCalcResult(result)
       setStoreDist(dist)
@@ -577,7 +599,7 @@ export default function HRPage() {
       setCompErr(e instanceof Error ? e.message : '計算失敗')
     }
     setComputing(false)
-  }, [pay, att, loc, adj, brk, year, month, viewMode, dateFrom, dateTo, storeFilter, stdH, excludeMgmt, locFilter])
+  }, [pay, att, loc, adj, brk, year, month, viewMode, dateFrom, dateTo, storeFilter, stdH, excludeMgmt, locFilter, getHolidays])
 
   // 把一張快照 POST 到雲端（給總覽等頁面讀）
   const postSnapshot = useCallback(async (
@@ -601,11 +623,12 @@ export default function HRPage() {
   useEffect(() => {
     if (!dirtyRef.current || !pay.length || !att) return
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current)
-    autoSaveTimer.current = setTimeout(() => {
+    autoSaveTimer.current = setTimeout(async () => {
       try {
         const per = detectPeriod(att)
         if (!per) return
-        const base = { pay, att, loc, adj, brk, stdH: getMonthlyStdH(per.year, per.month) }
+        const holidays = await getHolidays(per.year, per.month)
+        const base = { pay, att, loc, adj, brk, stdH: getMonthlyStdH(per.year, per.month), holidays }
         // 月快照（pf=1）
         const mDist = computeHr({ ...base, year: per.year, month: per.month, viewMode: 'month' }).dist
         postSnapshot({ year: per.year, month: per.month, viewMode: 'month', dateFrom: null, dateTo: null }, mDist)
@@ -615,7 +638,7 @@ export default function HRPage() {
       } catch (e) { console.warn('[auto snapshot]', e) }
     }, 1000)
     return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current) }
-  }, [pay, att, loc, adj, brk, postSnapshot])
+  }, [pay, att, loc, adj, brk, postSnapshot, getHolidays])
 
   const results = calcResult?.results || []
   const ftCount = results.filter(e => e.type === '月薪正職').length
