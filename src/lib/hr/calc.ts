@@ -1037,7 +1037,8 @@ export function calcResults(
   payIds.forEach(id => {
     if (!punchIds.has(id)) {
       const e = payMap[id]
-      if (e && e.type !== '未設定' && (!store || e.dept === store))
+      // 區間內完全不在職（已離職/未到職）不算異常，與員工明細的排除口徑一致
+      if (e && e.type !== '未設定' && activeFactor(e) > 0 && (!store || e.dept === store))
         anom.push({ sev: 'error', type: '無出勤紀錄', id, name: e.name, date: '–', detail: '區間無出勤' })
     }
   })
