@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/server'
 
 // GET /api/hr-employees
 // 從 HR 人事系統（同資料庫 public.employees）帶入在職員工的薪資保險現值，
@@ -16,7 +16,7 @@ const STORE_TO_DEPT: Record<string, string> = {
 
 export async function GET() {
   try {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
     // 在職 + 近三個月內離職的都帶（算過去月份才不會漏掉離職者；
     // 計算核心會依到職/離職日把期間外的人排除、期間內的按在職天數打折應執勤）
     const cutoff = new Date(Date.now() - 92 * 86400000).toISOString().slice(0, 10)

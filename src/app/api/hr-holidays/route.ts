@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/server'
 
 // GET /api/hr-holidays?year=YYYY&month=M
 // 讀 HR 系統的國定假日表（public.public_holidays），取代週報的調整表國定假日分頁。
@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Missing year/month' }, { status: 400 })
   }
   try {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
     const pad = (n: number) => String(n).padStart(2, '0')
     const from = `${year}-${pad(month)}-01`
     const to = month === 12 ? `${year + 1}-01-01` : `${year}-${pad(month + 1)}-01`

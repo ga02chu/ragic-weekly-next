@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/server'
 
 // 分店分攤校正紀錄：跨店支援、休息卡打錯店等系統算不準的情況人工校正。
 // 兩種 kind（見 supabase/hr_store_adjustments.sql）：
@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const from = searchParams.get('from'), to = searchParams.get('to')
   try {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
     let q = supabase
       .from('hr_store_adjustments')
       .select(COLS)
@@ -78,7 +78,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
     const { data, error } = await supabase
       .from('hr_store_adjustments')
       .insert(payload)
@@ -98,7 +98,7 @@ export async function DELETE(request: NextRequest) {
   const id = searchParams.get('id')
   if (!id) return NextResponse.json({ error: '缺少 id' }, { status: 400 })
   try {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
     const { error } = await supabase.from('hr_store_adjustments').delete().eq('id', id)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json({ ok: true })

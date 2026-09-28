@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/server'
 
 interface ByStoreEntry { cat: string; totalCost: number }
 interface Snapshot {
@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
   const month = searchParams.get('month')
 
   try {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
     let q = supabase.from('hr_snapshots').select('*').order('year', { ascending: false }).order('month', { ascending: false }).order('calc_at', { ascending: false })
     if (year) q = q.eq('year', Number(year))
     if (month) q = q.eq('month', Number(month))
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Missing year/month' }, { status: 400 })
   }
   try {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
     const payload = {
       year: body.year,
       month: body.month,

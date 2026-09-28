@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/server'
 
 // 表結構（Supabase）：
 //   hr_raw_uploads
@@ -14,7 +14,7 @@ const VALID_KEYS = new Set(['pay', 'att', 'loc', 'adj', 'brk'])
 // GET /api/hr-raw → 回傳全部 5 種檔案的最新版（key 是唯一鍵，永遠最多 5 筆）
 export async function GET() {
   try {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
     const { data, error } = await supabase
       .from('hr_raw_uploads')
       .select('file_key, data, meta, uploaded_at, uploaded_by')
@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Missing data' }, { status: 400 })
   }
   try {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
     const payload = {
       file_key: body.file_key,
       data: body.data,
@@ -66,7 +66,7 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: 'Missing or invalid file_key' }, { status: 400 })
   }
   try {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
     const { error } = await supabase.from('hr_raw_uploads').delete().eq('file_key', file_key)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json({ ok: true })

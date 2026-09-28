@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/server'
 
 // GET /api/hr-adjustments?year=YYYY&month=M
 // 讀 HR 系統的加扣項登記表（public.monthly_adjustments），取代 Apollo 出勤檔的加扣項分頁。
@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Missing year/month' }, { status: 400 })
   }
   try {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
     const mstr = `${year}-${String(month).padStart(2, '0')}`
     const { data, error } = await supabase
       .schema('public')
